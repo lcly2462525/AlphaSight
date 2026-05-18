@@ -1,0 +1,20 @@
+{"request_id": "report_01", "issues": [{"quote": "December quarter", "reason": "The evidence confirms that the Advanced Materials business of Honeywell will be reported as discontinued operations starting with the quarter ending December 31, 2025, aligning with the December quarter, so the claim is consistent with the evidence."}, {"quote": "2025-01-02", "reason": "The evidence shows no financial reporting or event tied to January 2, 2025; the closest relevant date is December 2, 2025, for Nike's press release, making the claim unsupported."}, {"quote": "January 2", "reason": "The evidence references January 12–15, 2026, for the J.P. Morgan Healthcare Conference, and January 19, 2017, for a bond indenture, but no event or data is tied to January 2, 2025, making the claim unsupported."}, {"quote": "December 31", "reason": "The evidence confirms that Duke Energy announced a retirement effective December 31, 2026, and JPMorgan ETF distributions are payable on January 9 and 16, 2026, to unitholders of record on December 31, 2025, which supports the relevance of December 31, 2025, as a key date."}, {"quote": "April low close", "reason": "The evidence confirms that Alphabet's shares hit their 2025 low in April due to tariff threats, which aligns with the claim of an April low close."}]}
+{"request_id": "report_02", "issues": []}
+{"request_id": "report_03", "issues": [{"quote": "FY26 Q1 revenue: **$67.31 billion**", "reason": "The evidence shows Microsoft's FY26 Q1 revenue was $77.67 billion, not $67.31 billion. This contradicts the claim, as confirmed in multiple news sources citing Microsoft's earnings report."}, {"quote": "FY26 Q1 net income: **$2.00 billion**", "reason": "The evidence indicates Meta's Q3 2025 net income was $2.7 billion, and Apple's Q4 2025 net income was $27.4 billion, but no source supports a $2.00 billion net income for FY26 Q1. The claim is unsupported and contradicted by the absence of any matching figure in the evidence."}]}
+{"request_id": "report_04", "issues": []}
+{"request_id": "report_05", "issues": []}
+{"request_id": "report_06", "issues": []}
+{"request_id": "report_07", "issues": []}
+{"request_id": "report_08", "issues": []}
+{"request_id": "report_09", "issues": []}
+{"request_id": "report_10", "issues": []}
+{"request_id": "report_11", "issues": []}
+{"request_id": "report_12", "issues": []}
+{"request_id": "report_13", "issues": [{"quote": "每股收益（EPS，摊薄） | **$7.19** | ~$7.08–$7.22 | 微超 / 基本符合", "reason": "The claim states a diluted EPS of $7.19, but the verified data from DIS/earnings.json shows FY2026 Q1 EPS at $1.63, which contradicts the claim. The figure is not consistent with any reported quarter's EPS in the evidence."}, {"quote": "实际 EPS 0.719 美元 vs. 预期 0.7219 美元，惊喜幅度 **-0.40%**", "reason": "The claim cites an actual EPS of $0.719, but the verified data from DIS/earnings.json shows FY2026 Q1 EPS at $1.63, which directly contradicts the claim. The value is not supported by any evidence."}, {"quote": "7 月 17 日 NFLX 收于 $127.417（盘中高点 $127.75，成交量 6,469.9 万股，显著高于近期均值）", "reason": "The claim states Netflix closed at $127.417 on July 17, but the evidence from NFLX's 10-Q filing dated July 18, 2025, shows a figure of $127,411 in thousands related to gains on derivatives, not a stock price. No stock price data is present in the evidence, and the number $127.417 is not confirmed by any source."}, {"quote": "7 月 18 日（周五）开盘 $124.196，**收盘 $120.924，单日下跌约 5.1%**，成交量放大至 1.069 亿股", "reason": "The claim references a stock price of $120.924 for Netflix on July 18, but the evidence from news/NVDA/137950011.json and news/TSLA/137950011.json contains no data on Netflix stock prices. The only relevant filing (NFLX/10-Q) does not include daily stock prices, and the numbers cited are unrelated to stock performance."}]}
+{"request_id": "report_14", "issues": []}
+{"request_id": "report_15", "issues": []}
+{"request_id": "report_16", "issues": []}
+{"request_id": "report_17", "issues": []}
+{"request_id": "report_18", "issues": []}
+{"request_id": "report_19", "issues": []}
+{"request_id": "report_20", "issues": []}
