@@ -1,0 +1,12 @@
+# Runtime deps for the AlphaSight SDK + reference baseline.
+# Requires Python 3.10+ (PEP 604 `X | None` annotations).
+
+openai>=1.40        # llm.py: OpenAI-compatible chat client
+pydantic>=2.5       # schemas.py: GenerateRequest / Report / ReviewRequest / ReviewIssue / DocMeta
+pyyaml>=6.0         # submission.py: parse submission.yaml
+rank-bm25>=0.2.2    # submission.py: BM25 retrieval in ExampleSubmission
+
+# Optional but commonly useful for participants:
+# pyarrow>=15.0       # read dataset/prices_minute/<TICKER>/<YYYY-MM>.parquet
+# pandas>=2.0         # tabular wrangling
+# beautifulsoup4>=4.12  # cleaner HTML parsing than the regex strip in submission.py

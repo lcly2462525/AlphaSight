@@ -1,0 +1,98 @@
+# Team identifier — fill with your team number (e.g. "team-07").
+team_id: ref-baseline
+
+# ============================================================================
+# LLM kwargs forwarded to llm.chat() for Submission.generate().
+#
+# Any field accepted by chat() is valid here. Below covers the OpenAI
+# Chat Completions surface + the common vLLM extras (top_k,
+# repetition_penalty, min_p, guided decoding, beam search, ...).
+# Anything missing can go through extra_body.
+# ============================================================================
+generate:
+  # ---- OpenAI standard sampling ----
+  temperature: 0.2
+  top_p: 0.9
+  max_tokens: 2048
+  # presence_penalty: 0.0
+  # frequency_penalty: 0.0
+  # stop: ["\n\nReferences"]
+  # seed: 42
+  # n: 1
+
+  # ---- Structured output (force valid JSON) ----
+  # response_format: { type: "json_object" }
+
+  # ---- Function calling ----
+  # tools: [...]
+  # tool_choice: "auto"
+  # parallel_tool_calls: true
+
+  # ---- Logprobs / debugging ----
+  # logprobs: true
+  # top_logprobs: 5
+  # logit_bias: { "50256": -100 }
+  # user: "team-07"
+
+  # ---- vLLM extras (forwarded via extra_body, ignored by stock OpenAI) ----
+  # top_k: 40
+  # repetition_penalty: 1.05
+  # min_p: 0.05
+  # length_penalty: 1.0
+  # best_of: 1
+  # min_tokens: 200
+  # ignore_eos: false
+  # stop_token_ids: [128001]
+  # skip_special_tokens: true
+  # include_stop_str_in_output: false
+  # use_beam_search: false
+  # early_stopping: false
+  # truncate_prompt_tokens: 14336
+  # prompt_logprobs: 0
+
+  # ---- vLLM guided decoding (constrain output shape) ----
+  # guided_json: { type: "object", properties: {...} }
+  # guided_regex: "[A-Z][a-z]+"
+  # guided_choice: ["bullish", "bearish", "neutral"]
+  # guided_grammar: "..."
+
+  # ---- Escape hatch / transport ----
+  # extra_body: {}
+  # extra_headers: { X-Team: "team-07" }
+  # timeout: 120.0
+
+# ============================================================================
+# LLM kwargs for Submission.review(). Same surface as `generate` above.
+# response_format defaults to json_object because review() wants the
+# parser to see {"issues": [...]} reliably.
+# ============================================================================
+review:
+  # ---- Sampling ----
+  temperature: 0.0
+  max_tokens: 1024
+  # top_p: 1.0
+  # seed: 42
+
+  # ---- Structured output (required by the parser) ----
+  response_format:
+    type: json_object
+
+  # ---- vLLM guided decoding (强约束: 让模型直接输出符合 schema 的 JSON) ----
+  # guided_json:
+  #   type: object
+  #   required: [issues]
+  #   properties:
+  #     issues:
+  #       type: array
+  #       items:
+  #         type: object
+  #         required: [quote, reason]
+  #         properties:
+  #           quote: { type: string }
+  #           reason: { type: string }
+
+  # ---- vLLM extras (uncomment as needed) ----
+  # top_k: 40
+  # repetition_penalty: 1.0
+  # min_p: 0.05
+  # min_tokens: 0

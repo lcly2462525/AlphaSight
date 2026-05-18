@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Output files
+output/
+*.jsonl
+*.md
+
+# Dataset & large model data
+dataset/
+*.zip
+*.tar
+*.tar.gz
+*.shm
+
+# Environment variables
+.env
+*.env
+
+# Virtual environment
+venv/
+env/core.*
