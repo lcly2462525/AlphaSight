@@ -60,22 +60,52 @@ def _split_items(text: str) -> list[tuple[str, str]]:
     return segs
 
 
+def _is_natural(text: str) -> bool:
+    """Reject residual binary/garbage chunks (defense in depth).
+
+    Natural prose has mostly letters+spaces and regular word spacing;
+    decoded binary has few spaces, many symbols, huge "words".
+    """
+    n = len(text)
+    if n < 1:
+        return False
+    letters = sum(c.isalpha() for c in text)
+    spaces = sum(c == " " for c in text)
+    # loose: financial tables are number-dense but still real prose;
+    # the space + word-length checks are the real binary discriminators
+    if letters / n < 0.45:
+        return False
+    if spaces / n < 0.08:               # binary blobs lack word spacing
+        return False
+    longest = max((len(w) for w in text.split()), default=0)
+    return longest <= 40               # no 200-char "tokens"
+
+
+def _mk(path, text, kind, section, out):
+    if _is_natural(text):
+        out.append(Chunk(path, text, kind, section))
+
+
 def chunk_doc(path: str, text: str, kind: str) -> list[Chunk]:
     if not text:
         return []
+    out: list[Chunk] = []
     if kind == "filing":
-        out: list[Chunk] = []
         for label, body in _split_items(text):
             for w in _windows(body, 1100, 150):
-                out.append(Chunk(path, w, kind, label))
+                _mk(path, w, kind, label, out)
         return out
     if kind == "news":
         head, _, rest = text.partition("\n")
-        out = [Chunk(path, head.strip(), kind, "title")] if head.strip() else []
+        if head.strip():
+            _mk(path, head.strip(), kind, "title", out)
         for w in _windows(rest or text, 800, 120):
-            out.append(Chunk(path, w, kind, "body"))
+            _mk(path, w, kind, "body", out)
         return out
     if kind == "social":
-        return [Chunk(path, t, kind, "social")
-                for t in _windows(text, 1000, 0)]
-    return [Chunk(path, w, kind, "") for w in _windows(text, 1200, 100)]
+        for t in _windows(text, 1000, 0):
+            _mk(path, t, kind, "social", out)
+        return out
+    for w in _windows(text, 1200, 100):
+        _mk(path, w, kind, "", out)
+    return out

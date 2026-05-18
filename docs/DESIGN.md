@@ -114,12 +114,16 @@ class RouteDecision:
 
 ### 3.3 Embedding 模型使用
 
-- 模型：`Qwen/Qwen3-VL-Embedding-8B`（多模态嵌入，仅用文本通道）。
+- 模型：HuggingFace repo id `Qwen/Qwen3-VL-Embedding-8B`（多模态嵌入，仅用文本通道）。
+  **不写死绝对路径**：默认用 HF id，由 HF 从缓存（`HF_HOME`/`~/.cache/huggingface`）解析或下载；
+  `ALPHASIGHT_EMBED_MODEL` 可覆盖为别的 HF id 或本地目录。
 - **多后端 + 硬降级**（`embedder.py`），按序尝试：
   1. **OpenAI 兼容 `/v1/embeddings` endpoint（首选）** —— 评测机用 vLLM 起嵌入服务，进程内不加载，避开 VL 加载坑 + 与推理 LLM 抢显存。
-  2. `sentence-transformers`（`trust_remote_code`）。
+  2. `sentence-transformers`（HuggingFace，`trust_remote_code`）。
   3. `transformers` `AutoModel` + last-token pooling（Qwen embedding 风格）。
-  4. 全失败 → 返回 None，HybridRetriever 静默退「纯 BM25」，任何环境不崩。
+  4. 全失败 → 返回 None，HybridRetriever 退「纯 BM25」，任何环境不崩。
+- **失败可见**：每个后端加载/编码失败都用 `logging` 打到 **stderr（run 控制台）**，
+  含失败的 HF id 与异常；不再静默降级，配错路径一眼可见。
 - **Instruction 感知**：Qwen3 embedding 对 query 加 `Instruct: ...\nQuery: ` 前缀，document 不加；`encode(is_query=)` 区分，混用会掉召回。
 - **离线**：document 批量编码 → `index/dense.faiss`(IndexFlatIP) + `chunk_meta.jsonl`。
 - **在线**：query 编码 1 次（带 instruction）→ FAISS `search(top_N)`，限定在 BM25 narrowed 路径内。
