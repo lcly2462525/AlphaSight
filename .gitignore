@@ -1,26 +1,33 @@
-# Python cache
-__pycache__/
-*.pyc
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Output files
-output/
-*.jsonl
-*.md
-
-# Dataset & large model data
+# Dataset — large binary/data files, not tracked in git
 dataset/
-*.zip
-*.tar
-*.tar.gz
-*.shm
+dataset.zip
 
-# Environment variables
+# Large slide deck — exceeds GitHub 100MB single-file limit
+*.pptx
+
+# Prebuilt indexes — rebuilt from dataset, not tracked
+reference_submission/index/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# Env
 .env
-*.env
 
-# Virtual environment
-venv/
-env/core.*
+# Local-only smoke-test deps (eval box installs from requirements.txt)
+.deps/
+
+# Provided resources — injected by the cloud/eval env, not our code
+# (problem set incl. ground truth, and baseline reference prompts)
+reference_submission/problem/
+reference_submission/prompt_templates/reference_generate.md
+reference_submission/prompt_templates/reference_review.md
+
+# IDE
+.idea/
+.vscode/

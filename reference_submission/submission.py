@@ -257,6 +257,43 @@ class ExampleSubmission:
 
 
 class Submission(ExampleSubmission):
-    """Baseline entry point used by the harness."""
+    """Orchestrator: thin dispatch over the unified retrieval layer.
 
-    pass
+    Inherits ExampleSubmission only for env/catalog/LLM bootstrap and as
+    a last-resort fallback so run.py never crashes.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        from retrieval.base import HybridRetriever
+        from retrieval.entity import EntityResolver
+        from agents.generate import GenerateAgent
+        from agents.review import ReviewAgent
+
+        resolver = EntityResolver(self.symbols)
+        self._retriever = HybridRetriever(
+            self.catalog, self.corpus, self.prices_dir, resolver,
+            index_dir=_SELF_DIR / "index",
+        )
+        self._gen_agent = GenerateAgent(
+            self._retriever, self.llm, self._gen_params)
+        self._rev_agent = ReviewAgent(
+            self._retriever, self.llm, self._rev_params)
+
+    def generate(self, request: GenerateRequest) -> Report:
+        try:
+            content = self._gen_agent.run(request.topic)
+            if isinstance(content, str) and content.strip():
+                return Report(request_id=request.request_id, content=content)
+        except Exception:
+            pass
+        return ExampleSubmission.generate(self, request)
+
+    def review(self, request: ReviewRequest) -> list[ReviewIssue]:
+        try:
+            issues = self._rev_agent.run(request.report_markdown)
+            if isinstance(issues, list):
+                return issues
+        except Exception:
+            pass
+        return ExampleSubmission.review(self, request)
