@@ -1187,13 +1187,18 @@ class ReviewAgent:
     def _retrieval_candidates(self, claims: list[dict],
                               used: set[str],
                               primary: list[str]) -> list[dict]:
+        # Every BM25 path translates Chinese claims first (English corpus).
+        en = self._translate_claims(claims)
         out = []
-        for c in claims[:25]:
+        for i, c in enumerate(claims[:25]):
             q = c["quote"]
             if q in used:
                 continue
             tickers = self._scope(q, primary)
-            res = self.retriever.search(q, top_k=4, tickers=tickers or None)
+            sig = _claim_signal(q)
+            query = " ".join(p for p in (q, en.get(i), sig) if p)
+            res = self.retriever.search(
+                query[:4000], top_k=4, tickers=tickers or None)
             out.append({"quote": q,
                         "evidence": res.evidence_block()[:2500],
                         "kind": c.get("claim_type") or "narrative"})
