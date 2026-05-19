@@ -25,8 +25,8 @@ from retrieval.textutil import doc_text, tokenize
 _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 # per-kind candidate caps keep per-request BM25 build bounded
 _CAND_CAP = {"filing": 60, "news": 400, "social": 200, "research": 0}
-_CHUNK_BUDGET = 700
-_TOTAL_BUDGET = 9000
+_CHUNK_BUDGET = 1200
+_TOTAL_BUDGET = 12000
 
 
 @dataclass

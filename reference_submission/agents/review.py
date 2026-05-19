@@ -117,6 +117,22 @@ def _claim_metric(text: str) -> str | None:
     return None
 
 
+_SIGNAL_RE = re.compile(
+    r'\$[\d.,]+|\b\d+\.\d+\b|\b20\d{2}\b|Q[1-4]|FY\s?\d{2,4}|'
+    r'\d+(?:\.\d+)?\s*%|\b[A-Z]{2,5}\b')
+_SIGNAL_STOP = {"EPS", "FY", "QOQ", "YOY", "SEC", "NYSE", "NASDAQ",
+                "CIK", "GAAP", "USD", "CEO", "CFO", "AND", "THE",
+                "US", "OR", "BY", "IN", "AT", "OF", "TO"}
+
+
+def _claim_signal(quote: str) -> str:
+    """Extract high-signal tokens (numbers, dates, periods, tickers)
+    for a focused BM25 query — strips prose filler that dilutes IDF."""
+    toks = [t for t in _SIGNAL_RE.findall(quote)
+            if t not in _SIGNAL_STOP]
+    return " ".join(toks[:30])
+
+
 # ---- filing-date verification helpers ------------------------------
 
 _FORM_RE = re.compile(

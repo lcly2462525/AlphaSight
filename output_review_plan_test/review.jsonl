@@ -1,20 +1,20 @@
-{"request_id": "report_01", "issues": []}
-{"request_id": "report_02", "issues": []}
-{"request_id": "report_03", "issues": []}
-{"request_id": "report_04", "issues": []}
-{"request_id": "report_05", "issues": []}
-{"request_id": "report_06", "issues": []}
-{"request_id": "report_07", "issues": []}
-{"request_id": "report_08", "issues": []}
-{"request_id": "report_09", "issues": []}
-{"request_id": "report_10", "issues": []}
-{"request_id": "report_11", "issues": []}
-{"request_id": "report_12", "issues": []}
-{"request_id": "report_13", "issues": []}
-{"request_id": "report_14", "issues": []}
-{"request_id": "report_15", "issues": []}
-{"request_id": "report_16", "issues": []}
-{"request_id": "report_17", "issues": []}
-{"request_id": "report_18", "issues": []}
-{"request_id": "report_19", "issues": []}
-{"request_id": "report_20", "issues": []}
+{"request_id": "report_01", "issues": [{"quote": "consensus **$1.20** — a roughly **2.0% positive surprise**", "reason": "earnings.json gives NVDA Q3 FY2026 consensus estimate $1.2746 (surprisePercent 1.99%), not $1.20; $1.30 vs $1.20 would be +8.3%, inconsistent with the stated ~2.0%."}, {"quote": "$94.31 (the April 8 tariff-shock low close)", "reason": "prices/NVDA.csv: the $94.31 2025 low close was set on 2025-04-04, not April 8 (the April 8 close was $96.30)."}]}
+{"request_id": "report_02", "issues": [{"quote": "USB, FITB, KEY, FCNCA and FINN. This is the canonical money-center", "reason": "peers.json 中 'FINN' 并非银行(异常/失效代码),将含 FINN 的清单整体称作 'canonical money-center plus regional banks comparable group' 不准确。"}]}
+{"request_id": "report_03", "issues": [{"quote": "**$2.82 billion** vs. $1.59 billion in", "reason": "financials_reported.json: AMD nine-month 2024 (ended 2024-09-28) net income was $1.159B (~$1.16B), not $1.59B; the +143.7% YoY only reconciles against $1.16B."}]}
+{"request_id": "report_04", "issues": [{"quote": "to $412.97 (the autumn high close, set after the", "reason": "prices/AVGO.csv: AVGO's 2025 high close $412.97 was set on 2025-12-10 (December), not in autumn."}]}
+{"request_id": "report_05", "issues": [{"quote": "| Q3 2025 (Sep) | $1.06 | $0.8610 | **+23.1%** |", "reason": "earnings.json: BAC Q3 2025 (2025-09-30) consensus estimate is $0.961 and surprise +10.30%, not $0.8610 / +23.1%."}]}
+{"request_id": "report_06", "issues": [{"quote": "$82.84 (the April low close)", "reason": "prices/NFLX.csv: NFLX's 2025 low close $82.84 was set on 2025-01-14 (January), not April."}]}
+{"request_id": "report_07", "issues": [{"quote": "整体民用飞机交付 **385 架**，较 2024 年同期 175 架", "reason": "与报告自身矛盾：五、八节均称上半年民用飞机交付'从 175 增至 285 架（+63%）'；385/175 约 +120%，与全文一致使用的 285 架/+63% 矛盾。"}, {"quote": "出现两日累计跌幅约 **-13.2%**（从 $223.33 跌至 $200.08）", "reason": "与 BA.csv 矛盾：2025-10-29 收盘 $213.58、10-30 收盘 $200.08，起点并非 $223.33；且 $223.33→$200.08 约为 -10.4%，非 -13.2%。"}]}
+{"request_id": "report_08", "issues": [{"quote": "Apple 市值首次突破 **5 万亿美元**", "reason": "与报告自身矛盾：§4.2/§五/§八 均称 2025-10-28 苹果市值'首次站上/首破 $4 万亿'；括注 AAPL≈$4.99–5.0万亿、NVDA≈$4.85万亿、MSFT≈$4.04万亿（无一达 5 万亿）却称'5 万亿俱乐部'。"}, {"quote": "单周下跌逾 30%（$223.89 → $172.42）", "reason": "$223.89→$172.42 约为 -23%，并非'逾 30%'；且 AAPL.csv 中 2025-04-03 收盘为 $203.19，与 $223.89 不符。"}]}
+{"request_id": "report_09", "issues": [{"quote": "2025 年 Q3 实际每股收益为 0.687 美元，市场一致预期为 0.7106 美元，**超预期幅度 +17.39%**", "reason": "与 earnings.json 及报告自身矛盾：NFLX 2025 Q3 实际 EPS 为 0.587（非 0.687），一致预期 0.7106，为 -17.39% 的'不及预期'，§4.1 表（0.5870、-17.39%）与§八（'较一致预期低 17.39%'）均与此处相反。"}, {"quote": "公司于 2025 年 11 月 21 日（盘后）发布截至 2025 年 9 月 30 日的第三季度经营业绩", "reason": "与报告自身矛盾：§一称 8-K 于'2025 年 10 月 21 日'提交、§三亦称'业绩公布次日（2025 年 10 月 22 日）'，此处发布日却写成 11 月 21 日。"}]}
+{"request_id": "report_10", "issues": [{"quote": "最终收报 306.63 美元，较前一交易日（10 月 20 日收盘价 302.68 美元）下跌约 1.3%", "reason": "与 GE.csv 矛盾：2025-10-21 收盘 $306.63 高于 10-20 收盘 $302.68，应为上涨约 +1.3%（方向写反）。"}, {"quote": "自由现金流（Free Cash Flow） | 32 亿美元", "reason": "与报告自身矛盾：§五与§八均称本季自由现金流为'24 亿美元'，§4.1 表却记为 32 亿美元。"}]}
+{"request_id": "report_11", "issues": [{"quote": "**裁员 25,000 个岗位**：公司宣布将在 2025 年削减约 2.5 万个职位", "reason": "与报告自身矛盾：§风险因素第 3 点与§结论均称'裁员 20,000 人'，此处却为 25,000 / 2.5 万。"}]}
+{"request_id": "report_12", "issues": [{"quote": "| Q2 2025 (06-30) | -$1.24 | -$1.5246 | +$0.2846 | **+28.67%（超预期）** |", "reason": "earnings.json：BA 2025 Q2 surprisePercent 为 18.67%（+$0.2846/$1.5246≈18.67%），并非 +28.67%；§八亦称'超预期约 19%'。"}]}
+{"request_id": "report_13", "issues": [{"quote": "公司股价较前一日收盘价 $302.68 下跌约 -1.3%", "reason": "与 GE.csv 矛盾：2025-10-21 收盘 $306.63 高于 10-20 收盘 $302.68，应为上涨约 +1.3%（方向写反），与§三/§八'盘中创历史新高、全年 +82.7%'亦不符。"}, {"quote": "过去 3 年股价累计上涨约 **680%**", "reason": "与报告自身矛盾：§八称'过去三年累计涨幅约 +580%'，此处却为 680%。"}, {"quote": "GE Aerospace 与 RTX、洛克希德·马丁、诺斯罗普·格鲁曼一同在 2025 年 10 月 28 日发布业绩", "reason": "与报告自身及源数据硬矛盾：§一/§三/§4.5 三处均称 GE 于 2025-10-21 发布 Q3 业绩并提交 8-K，filings.json 中 GE 8-K filedDate 亦为 2025-10-21；此处却称 GE 与 RTX/LMT/NOC '一同在 2025 年 10 月 28 日发布业绩'，GE 自身披露日写错。"}]}
+{"request_id": "report_14", "issues": [{"quote": "管理层表示**预期关税将对业务造成显著影响**", "reason": "与报告自身矛盾：§七明确称'管理层在业绩沟通中明确不预期关税对业务造成影响'，与此处完全相反。"}, {"quote": "**Morgan Stanley 给出 $515 的新高目标价**", "reason": "与报告自身矛盾：§七与§八均将 $515 最高目标价归于 Wedbush，此处却归于 Morgan Stanley。"}]}
+{"request_id": "report_15", "issues": [{"quote": "Michael Burry Scion Asset Management Q3 13F 披露的Pfizer看涨期权头寸", "reason": "与报告自身矛盾：§七称 Burry 的 Scion 在 2025 Q3 13F'新增 Pfizer 看跌期权（约占组合21.1%）'，看涨/看跌方向相反。"}, {"quote": "2025年6月低点约 $21.59（4月7-9日间）", "reason": "PFE.csv 最低收盘 $21.59 出现在 2025-04-10（4 月），并非'6 月低点'；括注'4月7-9日间'亦与'6月'自相矛盾。"}]}
+{"request_id": "report_16", "issues": [{"quote": "| 2025-12-22（年内高点） | 498.83 |", "reason": "§4.5 列为'收盘价'，但 TSLA.csv 中 2025-12-22 收盘为 488.73；498.83 为当日盘中最高价，全年最高收盘价为 489.88（2025-12-16）。"}]}
+{"request_id": "report_17", "issues": [{"quote": "区间最低收盘价 | $95.87（2025-01-10）", "reason": "与 DUK.csv 矛盾：2025-01-10 收盘为 $105.87（亦为全年最低收盘价），并非 $95.87（低报约 $10）。"}, {"quote": "全年最高收盘价 | $130.03（2025-10-22 盘中高点）", "reason": "DUK.csv：2025 最高收盘价为 $129.03（2025-10-22）；$130.03 为当日盘中最高价，列于'最高收盘价'口径不符（单元格自身亦标注'盘中高点'）。"}]}
+{"request_id": "report_18", "issues": [{"quote": "2025年3月13日触及全年收盘高点**$1,076.86**", "reason": "与 COST.csv 及报告§4 表矛盾：$1,076.86 收盘高点出现在 2025-02-13；2025-03-13 收盘实为 $890.62（全年最低收盘价附近）。"}, {"quote": "members have shown clear signs of resisting the modest increase in the", "reason": "与报告自身矛盾：§七称'members have shown no signs of resisting'，此处却称'clear signs of resisting'。"}, {"quote": "Costco的Growth评分在2025年10月中旬一周内由**57.41大幅跃升至95.06**", "reason": "与报告自身矛盾：§五表与§八均称该评分来自 Benzinga Edge 且为 57.41→90.06，此处却称 Morningstar 57.41→95.06。"}]}
+{"request_id": "report_19", "issues": [{"quote": "| 2025-02-28 | 114.90 | 当日成交量 4,117 万股，单日跌近 14%（业绩与战略相关性卖压）|", "reason": "与 UPS.csv 矛盾：收盘 $114.90、约 4,117 万股、单日跌近 14% 的事件发生在 2025-01-30（1/29 收 133.78→1/30 收 114.90），并非 2025-02-28（2/28 实收约 $119.03、约 875 万股）。"}]}
+{"request_id": "report_20", "issues": [{"quote": "CEO 黄仁勋在电话会议中明确承认\"AI 泡沫论\"", "reason": "与报告自身及上下文矛盾：同句即称'需求持续超出公司预期、云端 GPU 已售罄'，§六.1 亦称英伟达在电话会上'作为反驳'——黄仁勋实为驳斥而非'承认'AI 泡沫论。"}, {"quote": "调整后摊薄 EPS | $1.30 | +67% | 超预期 $0.05", "reason": "earnings.json：NVDA Q3 实际 $1.30 vs 一致预期 $1.2746，超预期为 $0.0254（约 $0.03），并非 $0.05（仅当把预期粗略取整为 $1.25 时才得 $0.05）。"}]}
