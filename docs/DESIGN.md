@@ -204,10 +204,15 @@ topic
   ▼ HybridRetriever 每个子查询各检索 → 去重合并
   ▼ Writer          填 grounded_generate.md：FACTS 段 + EVIDENCE 段
   ▼ SelfAudit       抽 draft 数字/日期 → 与 Fact Store 核对 → 矛盾则 1 次纠正
-  ▼ Report (≤1000 字，每条断言 [SOURCE: path])
+  ▼ Report (≤1000 字，每条断言带【原文摘录式】引用)
 ```
 - 题型自适应：6 固定题型各配一个子查询模板（财报解读→拉 earnings+MD&A；市场反应→拉 prices+news；叙事反转→拉前后两窗对比）。
 - SelfAudit 用结构化核对为主，省 token、抓硬伤。
+- **引用 = 原文摘录，不是文献条目**：引用格式改为
+  `[SOURCE: <path> | "<≤25 词逐字摘录>"]`，摘录必须是 FACTS/EVIDENCE
+  里的字面子串（支撑该结论的那句/那个数），不是"参见 10-K/研报"式的
+  文献指代，也不是改写。读者要直接看到证明结论的原文措辞；杜绝
+  "引用了但看不到依据"。该约束写在 `grounded_generate.md`。
 
 ## 5. Review Agent
 
@@ -231,6 +236,23 @@ report_markdown
 - 周期解析覆盖 `FY26 Q1` / `FY2026Q3` / `first quarter of fiscal 2026`
   / `Q1 2025` 等形态；解析不到周期时退化为全周期集合反证（仍过 LLM）。
 - 单次 LLM 裁决批处理所有候选，控延迟与成本。
+
+**本轮针对 train 漏检/误报的修复（实测 report_01/02/03 从 0 命中→命中）：**
+- **逐字段 EPS 核查**：不再"任一数字≈actual 就算整条对"。分别识别
+  声明里的 actual / consensus(estimate) / beat-miss 方向，各自比对
+  earnings.json 的 `actual / estimate / surprise(Percent)`，含**符号**
+  （声称 miss 实为 beat 即判错）。修了"右数字混错字段"漏检。
+- **filing 日期核查**：FactStore 从 catalog 读 filing 元数据
+  （路径编码 `form__YYYY-MM-DD__accession`）；声明出现 form+日期(+accession)
+  时取真实 filed date 比对。修了"10-K 报错申报日"这类漏检。
+- **earnings 声明放宽识别**：无字面 "EPS" 但含 actual/consensus/beat/miss
+  + 数字 + 财季，也按 EPS 核查（report_03 形态）。
+- **ticker 作用域**：先取声明内的 ticker；否则用报告主体 ticker
+  （按 `(T)`/`$T`/词频/长度选，非字母序），1–2 字母弱主体不做确定性
+  核查 —— 同时治"漏检"和"拿错公司 earnings 误报"（report_01 型误报）。
+- **裁决器信任确定性证据**：`adjudicate.md` 改为——证据以
+  `DETERMINISTIC FACT` 开头者**必须报**（权威值反驳即出 issue），
+  检索类证据仍"存疑则丢"。在不抬高误报的前提下治欠检。
 
 ---
 
@@ -291,7 +313,33 @@ reference_submission/
 
 ---
 
-## 9. 待定 / 风险
+## 9. 运行配置 & 评测
+
+**LLM 网关（apicz 资源池）**
+- OpenAI 兼容端点 `https://apicz.boyuerichdata.com/v1`，默认模型
+  `gpt-4.1`（稳定；gpt-5 系列禁用 presence/frequency_penalty 等参数，
+  故不默认）。配置走 `.env`（**git 忽略，不入库**），`run.py` 自动加载。
+- **强制重试**：资源池会偶发 429/5xx，`llm.chat()` 包了重试
+  （`_create_with_retry`）：默认 5–6 次、间隔 30s，仅对
+  408/409/429/5xx/连接超时重试，400/401 等立即抛出；重试打 stderr。
+  由 `ALPHASIGHT_LLM_RETRIES` / `ALPHASIGHT_LLM_RETRY_INTERVAL` 调。
+- Embedding 复用同网关 `text-embedding-3-large`
+  （`ALPHASIGHT_EMBED_BASE_URL`/`_MODEL_NAME`）→ dense 路径可启用，
+  进程内不加载 8B 模型。
+
+**评测：LLM 裁判打分（`tools/eval_review.py`）**
+- 预测 quote 与 GT quote 逐字匹配过严（同一错误常换措辞），故用
+  LLM 裁判**按语义对齐** predicted↔GT issue，输出
+  matches / unmatched_gt / false_positives。
+- 指标：precision / recall / F1（每报告 + 汇总）。裁判模型
+  `ALPHASIGHT_EVAL_MODEL`（默认 gpt-4.1），复用带重试的 `chat`。
+- 用法：`run.py review --requests problem/review_train.jsonl` 出预测
+  → `tools/eval_review.py --pred ../output/review.jsonl --gt
+  problem/review_train_gt.jsonl`。是答辩消融对比（60%）的量化依据。
+
+---
+
+## 10. 待定 / 风险
 
 1. Qwen3-VL-Embedding-8B 的文本编码 API/维度需在云端确认（输出维度、是否需 instruction prefix）。
 2. filing 的 Item 锚点正则需用真实样本校准（不同 form 模板差异）。

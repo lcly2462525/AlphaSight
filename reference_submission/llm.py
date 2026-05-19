@@ -154,7 +154,37 @@ def chat(
     if extra_headers:
         kwargs["extra_headers"] = extra_headers
 
-    resp = client.chat.completions.create(**kwargs)
+    resp = _create_with_retry(client, kwargs)
     if return_full:
         return resp
     return resp.choices[0].message.content or ""
+
+
+def _create_with_retry(client, kwargs: dict):
+    """Resource-pooled endpoints emit sporadic 429/5xx. The provider
+    explicitly requires a retry loop: default 5 attempts, 30s apart
+    (override via ALPHASIGHT_LLM_RETRIES / ALPHASIGHT_LLM_RETRY_INTERVAL).
+    """
+    import sys
+    import time
+
+    tries = int(os.environ.get("ALPHASIGHT_LLM_RETRIES", "5"))
+    interval = float(os.environ.get("ALPHASIGHT_LLM_RETRY_INTERVAL", "30"))
+    last: Exception | None = None
+    for attempt in range(1, tries + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as e:  # noqa: BLE001
+            status = getattr(e, "status_code", None)
+            retryable = (
+                status in (408, 409, 429, 500, 502, 503, 504, 529)
+                or status is None  # connection/timeout: no status
+            )
+            last = e
+            if attempt >= tries or not retryable:
+                raise
+            print(f"[llm] attempt {attempt}/{tries} failed "
+                  f"(status={status}: {type(e).__name__}); retrying in "
+                  f"{interval:.0f}s", file=sys.stderr, flush=True)
+            time.sleep(interval)
+    raise last  # pragma: no cover

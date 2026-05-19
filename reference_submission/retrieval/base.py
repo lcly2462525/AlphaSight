@@ -47,7 +47,8 @@ class HybridRetriever:
         self.catalog = catalog
         self.corpus = Path(corpus_dir)
         self.entity = entity_resolver
-        self.fact_store = FactStore(self.corpus, Path(prices_dir))
+        self.fact_store = FactStore(self.corpus, Path(prices_dir),
+                                    catalog=catalog)
         self.router = QueryRouter()
         self._dense = None
         if index_dir is not None:
