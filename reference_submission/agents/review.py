@@ -354,6 +354,7 @@ class ReviewAgent:
         _log("extracting claims (regex + LLM) ...")
         claims = self._extract(anc)
         primary = self._primary_ticker(report)
+        self._attach_translations(claims)
 
         det: list[dict] = []
         used: set[str] = set()
@@ -492,6 +493,15 @@ class ReviewAgent:
         except Exception:
             return {}
 
+    def _attach_translations(self, claims: list[dict]) -> None:
+        """Translate Chinese claims ONCE and attach c['q_en'] (the
+        unit-normalized English projection). Shared by every BM25 path
+        AND the det-exact verifiers so there is exactly one translation
+        call per report. No-op when nothing is Chinese."""
+        for i, en in self._translate_claims(claims).items():
+            if 0 <= i < len(claims) and en:
+                claims[i]["q_en"] = en
+
     def _evidence_pool(self, primary: list[str],
                        claims: list[dict]) -> str:
         """ONE strong generate-style retrieval, reused across every
@@ -501,15 +511,15 @@ class ReviewAgent:
         their raw prose. Chinese claims also contribute an English
         translation so the English corpus is actually reachable."""
         try:
-            en = self._translate_claims(claims)
             parts: list[str] = list(primary or [])
-            for i, c in enumerate(claims[:24]):
+            for c in claims[:24]:
                 quote = c["quote"]
                 sig = _claim_signal(quote)
                 if sig:
                     parts.append(sig)
-                if i in en:
-                    parts.append(en[i])
+                qen = c.get("q_en")
+                if qen:
+                    parts.append(qen)
                 if _SOURCE_CUE.search(quote):
                     parts.append(quote)
             q = " ".join(parts)
@@ -751,7 +761,7 @@ class ReviewAgent:
                             primary: list[str]) -> list[dict]:
         out: list[dict] = []
         for c in claims:
-            q = c["quote"]
+            q = c.get("q_en") or c["quote"]
             metric = _claim_metric(q)
             if not metric:
                 continue
@@ -779,7 +789,7 @@ class ReviewAgent:
                     pinned = (year is not None and quarter is not None
                               and row.get("year") == year
                               and row.get("quarter") == quarter)
-                    out.append({"quote": q, "kind": "numeric",
+                    out.append({"quote": c["quote"], "kind": "numeric",
                                 "tier": "exact" if pinned else "weak",
                                 "evidence": (
                                     f"DETERMINISTIC FACT [SOURCE: {src}] "
@@ -806,7 +816,7 @@ class ReviewAgent:
                     f"FY{r['year']} Q{r['quarter']} {metric}={r['value']:g}"
                     for r in rows[:6])
                 out.append({
-                    "quote": q,
+                    "quote": c["quote"],
                     "evidence": (
                         f"DETERMINISTIC FACT [SOURCE: {rows[0]['source']}] "
                         f"{tk} {metric}{(' for ' + period) if period else ''}"
@@ -821,7 +831,7 @@ class ReviewAgent:
                          primary: list[str]) -> list[dict]:
         out: list[dict] = []
         for c in claims:
-            q = c["quote"]
+            q = c.get("q_en") or c["quote"]
             form = _claim_form(q)
             dates = _parse_dates(q)
             if not form or not dates:
@@ -842,7 +852,7 @@ class ReviewAgent:
                 if not real or any(d in real for d in dates):
                     break
                 out.append({
-                    "quote": q, "kind": "date", "tier": "exact",
+                    "quote": c["quote"], "kind": "date", "tier": "exact",
                     "evidence": (
                         f"DETERMINISTIC FACT [SOURCE: catalog] {tk} "
                         f"{form} filings were filed on {', '.join(real)} "
@@ -856,7 +866,7 @@ class ReviewAgent:
                                primary: list[str]) -> list[dict]:
         out: list[dict] = []
         for c in claims:
-            q = c["quote"]
+            q = c.get("q_en") or c["quote"]
             if not re.search(r"ended|ending|截至|结束", q, re.I):
                 continue
             dates = _parse_dates(q)
@@ -873,7 +883,7 @@ class ReviewAgent:
                 if not ends or any(d in ends for d in dates):
                     continue
                 out.append({
-                    "quote": q,
+                    "quote": c["quote"],
                     "kind": "date_timeline", "tier": "exact",
                     "evidence": (
                         f"DETERMINISTIC FACT [SOURCE: research/{tk}/"
@@ -887,7 +897,7 @@ class ReviewAgent:
                           primary: list[str]) -> list[dict]:
         out: list[dict] = []
         for c in claims:
-            q = c["quote"]
+            q = c.get("q_en") or c["quote"]
             if not _PRICE_CUE.search(q):
                 continue
             years = [int(y) for y in re.findall(r"\b(20\d{2})\b", q)]
@@ -920,7 +930,7 @@ class ReviewAgent:
                             f"high={row['high']} low={row['low']}")
                 if mismatch:
                     out.append({
-                        "quote": q,
+                        "quote": c["quote"],
                         "kind": "derived_calculation", "tier": "exact",
                         "evidence": (
                             "DETERMINISTIC FACT [SOURCE: prices/"
@@ -942,7 +952,7 @@ class ReviewAgent:
         out: list[dict] = []
         universe = set(self.retriever.subject_universe())
         for c in claims:
-            q = c["quote"]
+            q = c.get("q_en") or c["quote"]
             if not re.search(r"\bpeer", q, re.I) and not re.search(
                     r"同业|可比公司", q):
                 continue
@@ -980,7 +990,7 @@ class ReviewAgent:
             if not extras:
                 continue
             out.append({
-                "quote": q,
+                "quote": c["quote"],
                 "kind": "peer_membership", "tier": "exact",
                 "evidence": (
                     f"DETERMINISTIC FACT [SOURCE: research/{subj}/"
@@ -992,7 +1002,7 @@ class ReviewAgent:
     def _arithmetic_candidates(self, claims: list[dict]) -> list[dict]:
         out: list[dict] = []
         for c in claims:
-            q = c["quote"]
+            q = c.get("q_en") or c["quote"]
             if not re.search(r"环比|QoQ|较", q, re.I):
                 continue
             vals = []
@@ -1011,7 +1021,7 @@ class ReviewAgent:
                             (calc < 0 and _DIR_UP.search(q)))
             if mismatch or polarity_bad:
                 out.append({
-                    "quote": q,
+                    "quote": c["quote"],
                     "kind": "derived_calculation", "tier": "weak",
                     "evidence": (
                         f"DETERMINISTIC FACT arithmetic: using {a:g} vs {b:g}, "
@@ -1023,8 +1033,8 @@ class ReviewAgent:
         # numbers (source-free, near-zero false positives).
         _PX = r"\$?\s*\**\s*\$?\s*([\d,]+\.\d{2})"
         for c in claims:
-            q = c["quote"]
-            if q in {x["quote"] for x in out}:
+            q = c.get("q_en") or c["quote"]
+            if c["quote"] in {x["quote"] for x in out}:
                 continue
             if not re.search(r"calendar-year|close-to-close|price\s+"
                              r"(?:gain|decline|return)|annual\s+return|"
@@ -1054,7 +1064,7 @@ class ReviewAgent:
             if abs(claimed - calc) <= max(2.0, abs(calc) * 0.10):
                 continue
             out.append({
-                "quote": q,
+                "quote": c["quote"],
                 "kind": "derived_calculation", "tier": "exact",
                 "evidence": (
                     f"DETERMINISTIC FACT arithmetic: close-to-close "
@@ -1195,13 +1205,17 @@ class ReviewAgent:
     def _retrieval_candidates(self, claims: list[dict],
                               used: set[str],
                               primary: list[str]) -> list[dict]:
+        # Every BM25 path uses the shared translation (English corpus).
         out = []
         for c in claims[:25]:
             q = c["quote"]
             if q in used:
                 continue
             tickers = self._scope(q, primary)
-            res = self.retriever.search(q, top_k=4, tickers=tickers or None)
+            sig = _claim_signal(q)
+            query = " ".join(p for p in (q, c.get("q_en"), sig) if p)
+            res = self.retriever.search(
+                query[:4000], top_k=4, tickers=tickers or None)
             out.append({"quote": q,
                         "evidence": res.evidence_block()[:2500],
                         "kind": c.get("claim_type") or "narrative"})
