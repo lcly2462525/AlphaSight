@@ -318,7 +318,7 @@ class ReviewAgent:
             return primary
         return []
 
-    _MAX_ISSUES = 8          # GT is 0-3/report; over-emission tanks P
+    _MAX_ISSUES = 4          # GT is 0-3/report; over-emission tanks P
     _MAX_NARRATIVE = 4       # narrative path is the false-positive source
 
     def run(self, report: str) -> list[ReviewIssue]:
@@ -376,16 +376,45 @@ class ReviewAgent:
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
              f"grounded check over {len(sections)} sections "
              f"(shared evidence pool) ...")
+        # Collect ALL grounded candidates, then keep only the strongest
+        # few. Sections each surface ~2 → a long report yields 10+; the
+        # GT is 0-3, so emitting them all destroys precision. Rank by
+        # grounding strength (cites a structured source / hard number /
+        # an internal contradiction) and fill the remaining budget.
+        cand: list[tuple[int, str, str]] = []
         for q, r in self._grounded_check(evidence, facts, sections):
+            raw = anc.find_raw(q)
+            if not raw or raw in seen_raw:
+                continue
+            seen_raw.add(raw)
+            cand.append((self._ground_score(r), raw, r))
+        cand.sort(key=lambda x: -x[0])
+        for _, raw, r in cand:
             if len(issues) >= self._MAX_ISSUES:
                 break
-            raw = anc.find_raw(q)
-            if raw and raw not in seen_raw:
-                issues.append(ReviewIssue(quote=raw, reason=r))
-                seen_raw.add(raw)
+            issues.append(ReviewIssue(quote=raw, reason=r))
 
         _log(f"done ({time.time() - t0:.1f}s, {len(issues)} issues)")
         return issues[:self._MAX_ISSUES]
+
+    @staticmethod
+    def _ground_score(reason: str) -> int:
+        """Higher = more defensible. Prefer contradictions backed by a
+        structured corpus point or a hard number/date, then internal
+        self-contradictions, over vague narrative ones."""
+        r = reason or ""
+        s = 1
+        if re.search(r"earnings\.json|financials_reported|peers\.json|"
+                     r"prices/|catalog|\.csv|8-?K|10-?[KQ]|accession|"
+                     r"filed|披露|备案", r, re.I):
+            s += 3
+        if re.search(r"\d", r) and re.search(
+                r"vs\.?|不是|并非|应为|实为|矛盾|contradict|not\b|"
+                r"instead|而非", r, re.I):
+            s += 2
+        if re.search(r"自相矛盾|报告自身|上下文相反|前后|inconsistent", r):
+            s += 2
+        return s
 
     # ---- generate-style grounded sectioned review ------------------
 
