@@ -370,7 +370,7 @@ class ReviewAgent:
         #    then walk the report section by section and let the LLM
         #    compare — language-agnostic, contradiction-only, grounded
         #    on exact facts so it cannot hallucinate truth.
-        facts = self._facts_block(primary)
+        facts = self._facts_block(primary, anc.raw)
         evidence = self._evidence_pool(primary, claims)
         sections = self._split_sections(anc.raw)
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
@@ -389,12 +389,135 @@ class ReviewAgent:
 
     # ---- generate-style grounded sectioned review ------------------
 
-    def _facts_block(self, primary: list[str]) -> str:
+    @staticmethod
+    def _money(v) -> str:
+        if not isinstance(v, (int, float)):
+            return "?"
+        a = abs(v)
+        if a >= 1e9:
+            return f"{v / 1e9:.3g}B"
+        if a >= 1e6:
+            return f"{v / 1e6:.3g}M"
+        return f"{v:g}"
+
+    def _subject_tickers(self, report: str,
+                         primary: list[str]) -> list[str]:
+        """Lock the subject(s). Chinese reports often miss the
+        `(NYSE: X)` patterns, so fall back to whole-report entity
+        resolution, keeping only tickers we actually have data for."""
+        fs = self.retriever.fact_store
+        have = set(fs._filings)
         try:
-            return self.retriever.fact_store.facts_block(
-                primary or [], None)
+            have |= {t for t in self.retriever.subject_universe()}
         except Exception:
-            return "(no structured facts resolved)"
+            pass
+        out = [t for t in (primary or []) if t]
+        if not out:
+            try:
+                out = self.retriever.entity.resolve(report)
+            except Exception:
+                out = []
+        seen, keep = set(), []
+        for t in out:
+            if t in seen:
+                continue
+            seen.add(t)
+            tf = None
+            try:
+                tf = fs.lookup(t)
+            except Exception:
+                pass
+            if t in have or (tf and (tf.earnings or tf.financials
+                                     or tf.peers or tf.prices)):
+                keep.append(t)
+        return keep[:4]
+
+    def _facts_block(self, primary: list[str], report: str = "") -> str:
+        """Review-specific RICH point list: every authoritative data
+        point the LLM may need to align a claim to — all earnings rows,
+        single+cumulative financials, filing dates, period ends, peer
+        list, price anchors. Replaces generate's thin 9-line anchor
+        block (the grounded path is only as good as this list)."""
+        fs = self.retriever.fact_store
+        tickers = self._subject_tickers(report, primary)
+        if not tickers:
+            return "(no subject resolved — no structured facts)"
+        blocks: list[str] = []
+        for tk in tickers:
+            try:
+                tf = fs.lookup(tk)
+            except Exception:
+                continue
+            L = [f"=== {tk} ==="]
+            # recent years only (reports reference 2024-2026); drop the
+            # stale 2020-2022 noise and de-dupe (year,quarter).
+            def _recent(rows):
+                seen, keep = {}, []
+                for r in sorted(rows, key=lambda r: (r.get("year") or 0,
+                                                     r.get("quarter") or 0)):
+                    if (r.get("year") or 0) < 2024:
+                        continue
+                    seen[(r.get("year"), r.get("quarter"))] = r
+                for k in sorted(seen,
+                                key=lambda k: (k[0] or 0, k[1] or 0)):
+                    keep.append(seen[k])
+                return keep
+
+            ern = _recent(tf.earnings)
+            if ern:
+                L.append(f"EPS [research/{tk}/earnings.json] "
+                         f"(actual/consensus/surprise):")
+                for e in ern[-12:]:
+                    sp = e.get("surprisePercent")
+                    L.append(
+                        f"  FY{e.get('year')} Q{e.get('quarter')} "
+                        f"actual={e.get('actual')} est={e.get('estimate')} "
+                        f"surprise={e.get('surprise')}"
+                        + (f" ({sp:+.2f}%)"
+                           if isinstance(sp, (int, float)) else ""))
+            fin = _recent(tf.financials)
+            if fin:
+                L.append(f"Financials [research/{tk}/"
+                         f"financials_reported.json] (single-quarter; "
+                         f"cum=fiscal-YTD):")
+                for f in fin[-8:]:
+                    cum = ""
+                    if f.get("cumulative"):
+                        cum = (f" [9M/YTD cum rev="
+                               f"{self._money(f.get('revenue_cum'))} "
+                               f"ni={self._money(f.get('net_income_cum'))}]")
+                    L.append(
+                        f"  FY{f.get('year')} Q{f.get('quarter')} "
+                        f"rev={self._money(f.get('revenue'))} "
+                        f"ni={self._money(f.get('net_income'))} "
+                        f"end={f.get('endDate')}{cum}")
+            recs = fs._filings.get(tk, [])
+            if recs:
+                L.append("Filing dates [catalog]:")
+                for r in sorted(recs, key=lambda x: x.get("date") or "")[:14]:
+                    L.append(f"  {r.get('form')} filed {r.get('date')} "
+                             f"(acc {r.get('accession')})")
+            peers = list(tf.peers)
+            if peers:
+                L.append(f"Peers [research/{tk}/peers.json]: "
+                         f"{', '.join(peers)}")
+            yrs = sorted({d[:4] for d in tf.prices})
+            for y in yrs[-2:]:
+                try:
+                    w = fs.price_window(tk, int(y))
+                except Exception:
+                    w = None
+                if w:
+                    ret = w.get("return_pct")
+                    L.append(
+                        f"Prices [prices/{tk}.csv] {y}: "
+                        f"{w['first_date']} close={w['first']['close']} -> "
+                        f"{w['last_date']} close={w['last']['close']}"
+                        + (f" (calendar-year return {ret:+.1f}%)"
+                           if isinstance(ret, (int, float)) else ""))
+            blocks.append("\n".join(L))
+        return "\n\n".join(blocks) if blocks else \
+            "(no structured facts resolved)"
 
     @staticmethod
     def _split_sections(report: str) -> list[str]:
@@ -461,7 +584,7 @@ class ReviewAgent:
                 raw = chat(
                     [{"role": "user",
                       "content": self._grounded_p.format(
-                          facts=facts[:4000], evidence=evidence,
+                          facts=facts[:9000], evidence=evidence,
                           section=sec[:4000])}],
                     config=self.llm,
                     **{**self.params,
