@@ -457,17 +457,25 @@ class ReviewAgent:
     def _evidence_pool(self, primary: list[str],
                        claims: list[dict]) -> str:
         """ONE strong generate-style retrieval, reused across every
-        section. Per-section `sec[:1200]` queries were Chinese prose vs
-        English filings (weak BM25, fragmented). The query here is the
-        subject + the extracted claims — claims carry the specific
-        numbers/dates/English entities that actually hit source text."""
+        section. Query = subject + per-claim high-signal tokens
+        (numbers/dates/periods/tickers via _claim_signal) so BM25 IDF
+        is not diluted by prose filler. Source-attribution claims keep
+        their raw prose (outlet names like Bloomberg/Reuters are exactly
+        what the signal regex strips but what those claims hinge on)."""
         try:
-            q = " ".join((primary or [])
-                         + [c["quote"] for c in claims[:24]])
+            parts: list[str] = list(primary or [])
+            for c in claims[:24]:
+                quote = c["quote"]
+                sig = _claim_signal(quote)
+                if sig:
+                    parts.append(sig)
+                if _SOURCE_CUE.search(quote):
+                    parts.append(quote)
+            q = " ".join(parts)
             res = self.retriever.search(
-                q[:4000], top_k=14, tickers=primary or None)
+                q[:4000], top_k=20, tickers=primary or None)
             ev = res.evidence_block()
-            return ev[:7000] if ev else "(no passages retrieved)"
+            return ev[:9500] if ev else "(no passages retrieved)"
         except Exception:
             return "(no passages retrieved)"
 
