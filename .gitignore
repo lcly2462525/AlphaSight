@@ -16,8 +16,7 @@ __pycache__/
 dist/
 build/
 
-# Env
-.env
+# Env — .env IS tracked (private repo; cloud eval pulls config from git)
 
 # Local-only smoke-test deps (eval box installs from requirements.txt)
 .deps/
