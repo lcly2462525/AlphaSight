@@ -5,8 +5,16 @@ English MUST use the exact vocabulary those documents use, not generic
 translations — BM25 only matches the corpus wording.
 
 Hard rules:
-- Keep ALL numbers, dates, percentages, currency amounts, fiscal
-  periods (Q1/Q2/FY2025), and ticker symbols EXACTLY as written.
+- NORMALIZE Chinese number units into a standard English magnitude so
+  the value is machine-comparable. Convert: 万 -> ×10^4 (ten-thousand),
+  百万 -> million, 亿 -> ×10^8 (hundred-million), 十亿 -> billion,
+  万亿 -> trillion. Examples: 224.9亿美元 -> $22.49 billion;
+  9.13亿美元 -> $913 million; 净利润913百万美元 -> net income
+  $913 million; 1.2万亿美元 -> $1.2 trillion. Keep the digits faithful
+  to the converted magnitude; never drop the unit.
+- Keep all OTHER numbers, percentages, fiscal periods (Q1/Q2/FY2025),
+  and ticker symbols EXACTLY as written. Keep dates in ISO
+  (YYYY-MM-DD) or "Month D, YYYY" form so they stay machine-parseable.
 - Output short English keyword phrases, NOT fluent sentences. No
   explanations. Items already in English: copy unchanged.
 - When a term has a standard filing abbreviation, output BOTH the full
