@@ -20,6 +20,13 @@ _REV = ("RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues", "SalesRevenueNet")
 _NI = ("NetIncomeLoss", "ProfitLoss",
        "NetIncomeLossAvailableToCommonStockholdersBasic")
+_GP = ("GrossProfit",)
+_OP = ("OperatingIncomeLoss",)
+_OCF = ("NetCashProvidedByUsedInOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations")
+_ASSETS = ("Assets",)
+_EQUITY = ("StockholdersEquity",
+           "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest")
 
 # Income-statement / cash-flow lines in financials_reported.json are
 # cumulative from the fiscal-year start (Q2 = 6-month, Q3 = 9-month).
@@ -29,7 +36,8 @@ _NI = ("NetIncomeLoss", "ProfitLoss",
 # quarter of the same year, keeping the cumulative figure under *_cum
 # for any consumer that wants it. Balance-sheet items are point-in-time
 # and are left untouched.
-_FLOW_KEYS = ("revenue", "net_income")
+_FLOW_KEYS = ("revenue", "net_income", "gross_profit",
+              "operating_income", "operating_cash_flow")
 
 
 def _parse_day(s: str) -> date | None:
@@ -182,9 +190,22 @@ class FactStore:
                         if any(x in k for x in _REV)), None)
             ni = next((concepts[k] for k in concepts
                        if any(x in k for x in _NI)), None)
+            gp = next((concepts[k] for k in concepts
+                       if any(x in k for x in _GP)), None)
+            op = next((concepts[k] for k in concepts
+                       if any(x in k for x in _OP)), None)
+            ocf = next((concepts[k] for k in concepts
+                        if any(x in k for x in _OCF)), None)
+            assets = next((concepts[k] for k in concepts
+                           if any(x in k for x in _ASSETS)), None)
+            equity = next((concepts[k] for k in concepts
+                           if any(x in k for x in _EQUITY)), None)
             tf.financials.append({
                 "year": r.get("year"), "quarter": r.get("quarter"),
                 "form": r.get("form"), "revenue": rev, "net_income": ni,
+                "gross_profit": gp, "operating_income": op,
+                "operating_cash_flow": ocf,
+                "assets": assets, "equity": equity,
                 "startDate": (r.get("startDate") or "")[:10],
                 "endDate": (r.get("endDate") or "")[:10],
                 "filedDate": (r.get("filedDate") or "")[:10],
@@ -312,9 +333,11 @@ class FactStore:
                quarter: int | None = None) -> list[dict]:
         """Period-aligned metric rows for one ticker.
 
-        metric in {"eps", "revenue", "net_income"}. When year/quarter are
-        given, returns only the matching fiscal period(s); otherwise all
-        known rows. Each row: {year, quarter, value, source}.
+        metric in {"eps", "revenue", "net_income", "gross_profit",
+        "operating_income", "operating_cash_flow", "assets", "equity"}.
+        When year/quarter are given, returns only the matching fiscal
+        period(s); otherwise all known rows. Each row:
+        {year, quarter, value, source}.
         """
         tf = self._load(ticker)
         out: list[dict] = []
@@ -330,7 +353,9 @@ class FactStore:
                 out.append({"year": e.get("year"),
                             "quarter": e.get("quarter"), "value": v,
                             "source": f"research/{ticker}/earnings.json"})
-        elif metric in ("revenue", "net_income"):
+        elif metric in ("revenue", "net_income", "gross_profit",
+                        "operating_income", "operating_cash_flow",
+                        "assets", "equity"):
             for f in tf.financials:
                 v = f.get(metric)
                 if not isinstance(v, (int, float)):

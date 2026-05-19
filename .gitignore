@@ -39,3 +39,5 @@ build/
 .vscode/
 
 generatedataset/
+
+python_env/
