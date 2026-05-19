@@ -256,6 +256,18 @@ topic
 - 引用是文件名 = 云端跑的是旧代码（回退期），pull 到含本规则的
   版本重跑即恢复摘录格式（代码已就位）。
 
+**生成工作流加固（堵住 P0 残留 + 自审一致性）：**
+- **主体锁不到就退基线，不再瞎写**：`search(require_subject=True)`，
+  无主体 ticker 时直接返回空证据；`GenerateAgent.run` 锁不到主体
+  即 `raise` → `Submission` 回退 `ExampleSubmission`。彻底堵死
+  "LLM 选主体失败 → 退化全语料 → 写错公司"。
+- **self-audit 用锁定主体**：旧代码 `entity.resolve(topic)` 重解析，
+  自由命题为空 → 整个数字自审静默跳过。改为传入锁定 `subject`，
+  并**复用 review 的周期对齐 / per-field `_eps_problems`**（取代
+  "任一近 eps 数字"旧宽松逻辑），生成自审与互审同源。
+- **SUBJECT 约束前置**：从 prompt 尾部（# OUTPUT 之后，易被忽略）
+  移到 `# TOPIC` 下方的 `# SUBJECT (binding scope)` 段。
+
 ## 5. Review Agent
 
 ```

@@ -3,6 +3,9 @@ You are a sell-side equity research analyst. Write a focused, evidence-grounded 
 # TOPIC
 {topic}
 
+# SUBJECT (binding scope — read before anything else)
+{subject_block}
+
 # VERIFIED STRUCTURED FACTS (numbers you may rely on verbatim)
 {facts_block}
 

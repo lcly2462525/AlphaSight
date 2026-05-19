@@ -101,13 +101,16 @@ class HybridRetriever:
         return sorted(self.fact_store._filings)
 
     def search(self, query: str, *, route: RouteDecision | None = None,
-               top_k: int = 12,
-               tickers: list[str] | None = None) -> RetrievalResult:
+               top_k: int = 12, tickers: list[str] | None = None,
+               require_subject: bool = False) -> RetrievalResult:
         route = route or self.router.decide(query)
         # explicit subject lock wins; else resolve from the query text.
-        # Never silently widen to the whole corpus on an empty result —
-        # that is what pulled COST/WMT filings into an HD report.
         tickers = tickers or self.entity.resolve(query)
+        # generate sets require_subject: with no subject we must NOT
+        # widen to the whole corpus (that grounded an HD report on
+        # Costco's 10-Q) — return empty so the agent falls back.
+        if require_subject and not tickers:
+            return RetrievalResult(facts="", evidence=[], route=route)
         window = self._window(query)
         if route.tighten_window and window is None:
             window = None

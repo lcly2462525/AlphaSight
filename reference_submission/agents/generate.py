@@ -34,21 +34,28 @@ class GenerateAgent:
 
         t0 = time.time()
         subject = self._subject(topic)
-        _log(f"subject={subject or '(unresolved)'}; retrieving ...")
-        res = self.retriever.search(topic, top_k=12,
-                                    tickers=subject or None)
+        if not subject:
+            # No lockable subject -> do NOT fabricate on whole-corpus
+            # evidence. Bail so Submission falls back to the baseline.
+            _log("no subject resolved; deferring to baseline")
+            raise RuntimeError("no subject company resolved")
+        _log(f"subject={subject}; retrieving ...")
+        res = self.retriever.search(topic, top_k=12, tickers=subject,
+                                    require_subject=True)
         _log(f"retrieved {len(res.evidence)} passages "
              f"({time.time() - t0:.1f}s); calling LLM ...")
-        focus = (f"\n\n# SUBJECT COMPANY\nThis report is about: "
-                 f"{', '.join(subject)}. Use ONLY evidence about "
-                 f"{', '.join(subject)} for claims about it; cite a "
-                 f"peer's filing ONLY when explicitly comparing and "
-                 f"name the peer.") if subject else ""
+        subject_block = (
+            f"This report's subject company is **{', '.join(subject)}**. "
+            f"Make every claim about it using ONLY that company's own "
+            f"FACTS/EVIDENCE; cite a peer's path ONLY inside an explicit, "
+            f"labeled comparison and name the peer."
+        )
         prompt = self._prompt.format(
             topic=topic,
+            subject_block=subject_block,
             facts_block=res.facts or "(none)",
             evidence_block=res.evidence_block(),
-        ) + focus
+        )
         draft = chat([{"role": "user", "content": prompt}],
                      config=self.llm, **self.params)
         if not isinstance(draft, str) or not draft.strip():
@@ -57,7 +64,7 @@ class GenerateAgent:
             _log(f"done ({time.time() - t0:.1f}s, no audit)")
             return draft
         _log("self-audit ...")
-        out = self._self_audit(topic, draft)
+        out = self._self_audit(subject, draft)
         _log(f"done ({time.time() - t0:.1f}s)")
         return out
 
@@ -95,25 +102,42 @@ class GenerateAgent:
             pass
         return []
 
-    def _self_audit(self, topic: str, draft: str) -> str:
-        tickers = self.retriever.entity.resolve(topic)
+    def _self_audit(self, subject: list[str], draft: str) -> str:
+        # Reuse the review agent's tested per-field / period-aligned
+        # numeric verification instead of the old "any number near
+        # 'eps' contradicts all" heuristic. Audit the LOCKED subject
+        # (not a re-resolve of the topic, which is empty for open-ended
+        # topics and silently skipped the whole audit).
+        from agents.review import _parse_period, _eps_problems
+
+        fs = self.retriever.fact_store
         problems: list[str] = []
-        for tk in tickers[:3]:
-            tf = self.retriever.fact_store.lookup(tk)
-            eps_truth = [e["actual"] for e in tf.earnings
-                         if isinstance(e.get("actual"), (int, float))]
+        for tk in subject[:3]:
             for line in draft.splitlines():
-                if not eps_truth or not _EPS_NEAR.search(line):
+                ln = line.strip()
+                if len(ln) < 8:
                     continue
-                for n in parse_numbers(line):
-                    if n.is_pct or abs(n.value) > 100:
-                        continue
-                    if all(contradicts(n.value, t) for t in eps_truth):
+                yr, q = _parse_period(ln)
+                if _EPS_NEAR.search(ln):
+                    row = fs.earnings_row(tk, yr, q)
+                    if row:
+                        for p in _eps_problems(ln, row):
+                            problems.append(
+                                f'- "{ln[:140]}" -> {tk} '
+                                f'FY{row.get("year")}Q{row.get("quarter")}'
+                                f': {p}')
+                if _REV_NEAR.search(ln):
+                    rows = fs.metric(tk, "revenue", year=yr, quarter=q)
+                    truths = [r["value"] for r in rows]
+                    nums = [n.value for n in parse_numbers(ln)
+                            if not n.is_pct and abs(n.value) >= 1e6]
+                    if truths and nums and not any(
+                            not contradicts(n, t)
+                            for n in nums for t in truths):
                         problems.append(
-                            f'- QUOTE: "{n.raw}"  CONTEXT: {line.strip()[:120]}'
-                            f'  FACT: {tk} reported EPS in '
-                            f'{sorted(set(eps_truth))}')
-                        break
+                            f'- "{ln[:140]}" -> {tk} revenue verified '
+                            f'{[f"{t:.0f}" for t in truths[:3]]}')
+        problems = problems[:6]
         if not problems:
             return draft
         fix = (
