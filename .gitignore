@@ -5,8 +5,15 @@ dataset.zip
 # Large slide deck — exceeds GitHub 100MB single-file limit
 *.pptx
 
-# Prebuilt indexes — rebuilt from dataset, not tracked
-# reference_submission/index/
+# Prebuilt indexes — rebuilt from dataset on the box with the embedding
+# endpoint; large binary, never tracked (GitHub 100MB single-file limit)
+reference_submission/index/
+
+# Run outputs — review.jsonl is regenerated each run; human-labeled
+# copies kept under output_human_gold/. The curated output/generate/*.md
+# samples stay tracked (already committed).
+output/review.jsonl
+output_human_gold/
 
 # Python
 __pycache__/
