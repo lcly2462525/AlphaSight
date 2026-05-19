@@ -65,6 +65,21 @@ class HybridRetriever:
     def _narrow_chunks(self, tickers, window, route) -> list[Chunk]:
         metas = filter_docs(self.catalog, symbols=tickers or None,
                             time_range=window)
+        # filings/research are single-issuer: their path is
+        # `<kind>/<TICKER>/...`. Multi-symbol news can tag peers, so a
+        # WMT 10-Q tagged with HD would otherwise leak into an HD
+        # report. For filing/research require the PATH company to be the
+        # subject; news/social stay symbol-scoped (legitimately cross).
+        if tickers:
+            tset = set(tickers)
+            kept = []
+            for m in metas:
+                if m.kind in ("filing", "research"):
+                    parts = m.path.split("/")
+                    if len(parts) > 1 and parts[1] not in tset:
+                        continue
+                kept.append(m)
+            metas = kept
         by_kind: dict[str, list] = {}
         for m in metas:
             by_kind.setdefault(m.kind, []).append(m)
@@ -79,10 +94,20 @@ class HybridRetriever:
                 chunks.extend(chunk_doc(m.path, txt, m.kind))
         return chunks
 
+    def subject_universe(self) -> list[str]:
+        """Tickers that actually have filings — the only valid report
+        subjects. Used by the agent to lock a subject for open-ended
+        topics instead of falling back to whole-corpus retrieval."""
+        return sorted(self.fact_store._filings)
+
     def search(self, query: str, *, route: RouteDecision | None = None,
-               top_k: int = 12) -> RetrievalResult:
+               top_k: int = 12,
+               tickers: list[str] | None = None) -> RetrievalResult:
         route = route or self.router.decide(query)
-        tickers = self.entity.resolve(query)
+        # explicit subject lock wins; else resolve from the query text.
+        # Never silently widen to the whole corpus on an empty result —
+        # that is what pulled COST/WMT filings into an HD report.
+        tickers = tickers or self.entity.resolve(query)
         window = self._window(query)
         if route.tighten_window and window is None:
             window = None
@@ -90,7 +115,13 @@ class HybridRetriever:
         facts = (self.fact_store.facts_block(tickers, window)
                  if route.use_fact_store else "")
 
+        # The corpus is entirely 2025; topics routinely say "FY2026" /
+        # "2026 outlook". A hard year filter then removes every doc and
+        # the model hallucinates. Relax the window (keep the ticker
+        # scope) rather than return nothing.
         chunks = self._narrow_chunks(tickers, window, route)
+        if not chunks and window is not None:
+            chunks = self._narrow_chunks(tickers, None, route)
         if not chunks:
             return RetrievalResult(facts=facts, evidence=[], route=route)
 

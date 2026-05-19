@@ -236,6 +236,26 @@ topic
   文献指代，也不是改写。读者要直接看到证明结论的原文措辞；杜绝
   "引用了但看不到依据"。该约束写在 `grounded_generate.md`。
 
+**本轮修复（云端 HD 报告把 Costco 的 10-Q 当 HD 事实在写）：**
+- **主体公司锁定（P0）**：自由命题不点名 ticker → 旧逻辑
+  `entity.resolve→[]` → 检索 `symbols=None` 退化成**全语料 BM25** →
+  捞到 COST/WMT 同业 filings 编故事。现在 `GenerateAgent._subject`：
+  先 `entity.resolve`；为空则**让 LLM 从 50 家有 filing 的公司里选 1 个
+  主体**，校验后锁定；`search(tickers=subject)` 严格按主体检索，
+  **绝不回退全语料**。prompt 追加 SUBJECT 段强调只用该公司证据。
+- **filing/research 按路径公司限定**：多 symbol 新闻会把同业 ticker
+  打进 tags，故 filing/research 额外要求**路径公司 == 主体**
+  （`filings/<T>/`），杜绝 "HD 报告引 `filings/WMT/10-Q`"。
+- **时间窗软化**：语料全是 2025，题目常说 "FY2026/2026 outlook"，
+  硬按年过滤会把全部文档滤空 → 模型瞎编。窗口过滤后为空则**放宽
+  时间窗**（保留主体作用域）重取，绝不返回空证据。
+- **grounding 硬化（P1）**：`grounded_generate.md` 增加——仅用给定
+  语料、缺数据写 "not available"（禁止 Statista 等外部/记忆数据、
+  禁止 `[not in source]` 标注）；价格/收益类必须引 `prices/<T>.csv`，
+  社媒推文不得作为价格/财务数字来源（仅作情绪佐证）。
+- 引用是文件名 = 云端跑的是旧代码（回退期），pull 到含本规则的
+  版本重跑即恢复摘录格式（代码已就位）。
+
 ## 5. Review Agent
 
 ```

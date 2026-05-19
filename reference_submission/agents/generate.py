@@ -33,15 +33,22 @@ class GenerateAgent:
             print(f"[gen] {m}", file=sys.stderr, flush=True)
 
         t0 = time.time()
-        _log("retrieving evidence ...")
-        res = self.retriever.search(topic, top_k=12)
+        subject = self._subject(topic)
+        _log(f"subject={subject or '(unresolved)'}; retrieving ...")
+        res = self.retriever.search(topic, top_k=12,
+                                    tickers=subject or None)
         _log(f"retrieved {len(res.evidence)} passages "
              f"({time.time() - t0:.1f}s); calling LLM ...")
+        focus = (f"\n\n# SUBJECT COMPANY\nThis report is about: "
+                 f"{', '.join(subject)}. Use ONLY evidence about "
+                 f"{', '.join(subject)} for claims about it; cite a "
+                 f"peer's filing ONLY when explicitly comparing and "
+                 f"name the peer.") if subject else ""
         prompt = self._prompt.format(
             topic=topic,
             facts_block=res.facts or "(none)",
             evidence_block=res.evidence_block(),
-        )
+        ) + focus
         draft = chat([{"role": "user", "content": prompt}],
                      config=self.llm, **self.params)
         if not isinstance(draft, str) or not draft.strip():
@@ -53,6 +60,40 @@ class GenerateAgent:
         out = self._self_audit(topic, draft)
         _log(f"done ({time.time() - t0:.1f}s)")
         return out
+
+    def _subject(self, topic: str) -> list[str]:
+        """Lock the report's subject company.
+
+        Open-ended topics ("which 2025 laggard wins in 2026") name no
+        ticker, so entity.resolve returns []. Without a subject the
+        retriever widened to the whole corpus and pulled peers' filings
+        (an HD report grounded on Costco's 10-Q). So: resolve from text;
+        if empty, have the LLM pick ONE ticker from the filing universe;
+        validate it; only then scope retrieval to it.
+        """
+        named = self.retriever.entity.resolve(topic)
+        if named:
+            return named[:3]
+        universe = self.retriever.subject_universe()
+        if not universe:
+            return []
+        pick = (
+            "Pick the SINGLE most relevant company for this research "
+            "topic. Reply with ONLY its ticker, exactly as listed.\n\n"
+            f"TICKERS: {', '.join(universe)}\n\nTOPIC: {topic}"
+        )
+        try:
+            raw = chat([{"role": "user", "content": pick}],
+                       config=self.llm,
+                       **{**self.params, "max_tokens": 8,
+                          "temperature": 0.0})
+            tok = re.findall(r"[A-Z][A-Z.\-]{0,6}", (raw or "").upper())
+            for t in tok:
+                if t in universe:
+                    return [t]
+        except Exception:
+            pass
+        return []
 
     def _self_audit(self, topic: str, draft: str) -> str:
         tickers = self.retriever.entity.resolve(topic)
