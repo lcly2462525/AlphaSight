@@ -6,7 +6,6 @@ chunking / BM25 / compression all agree on the same representation.
 
 from __future__ import annotations
 
-import html
 import json
 import re
 from functools import lru_cache
@@ -63,10 +62,6 @@ def strip_html(raw: str) -> str:
     raw = _DATA_URI.sub(" ", raw)
     raw = _HTML_TAG.sub(" ", raw)
     raw = _B64_RUN.sub(" ", raw)
-    # SEC filings keep entities (&#8212; em-dash, &#160; nbsp, &#8217;
-    # apostrophe). Decode so headers/numbers/quotes are real text.
-    raw = html.unescape(raw)
-    raw = raw.replace("\xa0", " ")
     return _WS.sub(" ", raw).strip()
 
 

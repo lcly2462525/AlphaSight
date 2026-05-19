@@ -30,24 +30,9 @@ class TickerFacts:
 
 
 class FactStore:
-    def __init__(self, corpus_dir: Path, prices_dir: Path,
-                 catalog: list | None = None) -> None:
+    def __init__(self, corpus_dir: Path, prices_dir: Path) -> None:
         self._research = corpus_dir / "research"
         self._prices = prices_dir
-        # per-ticker filing metadata from the catalog (authoritative
-        # filed dates; the path encodes form__YYYY-MM-DD__accession)
-        self._filings: dict[str, list[dict]] = {}
-        for d in catalog or []:
-            if getattr(d, "kind", None) != "filing":
-                continue
-            stem = Path(d.path).stem
-            parts = stem.split("__")
-            acc = parts[2] if len(parts) > 2 else ""
-            date = (d.timestamp or "")[:10]
-            for s in d.symbols or []:
-                self._filings.setdefault(s, []).append({
-                    "form": (d.form or (parts[0] if parts else "")),
-                    "date": date, "accession": acc, "path": d.path})
 
     @lru_cache(maxsize=64)
     def _load(self, ticker: str) -> TickerFacts:
@@ -56,32 +41,6 @@ class FactStore:
         self._load_financials(ticker, tf)
         self._load_prices(ticker, tf)
         return tf
-
-    def earnings_row(self, ticker: str, year: int | None,
-                     quarter: int | None) -> dict | None:
-        """Full earnings row (actual/estimate/surprise/surprisePercent)
-        for a fiscal period — enables per-field verification."""
-        for e in self._load(ticker).earnings:
-            if year is not None and e.get("year") != year:
-                continue
-            if quarter is not None and e.get("quarter") != quarter:
-                continue
-            return e
-        return None
-
-    def filings_of(self, ticker: str, form: str | None = None,
-                   accession: str | None = None) -> list[dict]:
-        """Filing-date records for a ticker, optionally filtered by form
-        prefix (10-K matches 10-K/A too) or exact accession."""
-        rows = self._filings.get(ticker, [])
-        out = []
-        for r in rows:
-            if accession and accession not in r["accession"]:
-                continue
-            if form and not r["form"].upper().startswith(form.upper()):
-                continue
-            out.append(r)
-        return out
 
     def _load_earnings(self, ticker: str, tf: TickerFacts) -> None:
         p = self._research / ticker / "earnings.json"
