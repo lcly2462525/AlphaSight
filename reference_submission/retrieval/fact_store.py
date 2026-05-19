@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import dataclass, field
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -19,6 +20,67 @@ _REV = ("RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues", "SalesRevenueNet")
 _NI = ("NetIncomeLoss", "ProfitLoss",
        "NetIncomeLossAvailableToCommonStockholdersBasic")
+
+# Income-statement / cash-flow lines in financials_reported.json are
+# cumulative from the fiscal-year start (Q2 = 6-month, Q3 = 9-month).
+# Feeding those to the model as "FY..Qn revenue" produces a fake
+# "doubling every quarter" narrative. We convert each period to its
+# true single-quarter value by differencing against the prior fiscal
+# quarter of the same year, keeping the cumulative figure under *_cum
+# for any consumer that wants it. Balance-sheet items are point-in-time
+# and are left untouched.
+_FLOW_KEYS = ("revenue", "net_income")
+
+
+def _parse_day(s: str) -> date | None:
+    try:
+        y, m, d = (int(x) for x in (s or "")[:10].split("-"))
+        return date(y, m, d)
+    except (ValueError, TypeError):
+        return None
+
+
+def _deflow_financials(rows: list[dict]) -> None:
+    # Canonical row per (year, quarter): prefer the latest-filed one.
+    by_pq: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r.get("year"), r.get("quarter"))
+        cur = by_pq.get(key)
+        if cur is None or (r.get("filedDate") or "") >= (
+                cur.get("filedDate") or ""):
+            by_pq[key] = r
+    # Pass 1: snapshot the cumulative value of every row before any
+    # differencing (rows are newest-first, so a prior quarter may not
+    # be visited yet when we need its cumulative figure).
+    for r in rows:
+        start = _parse_day(r.get("startDate", ""))
+        end = _parse_day(r.get("endDate", ""))
+        span = (end - start).days if start and end else None
+        for k in _FLOW_KEYS:
+            r[f"{k}_cum"] = r.get(k)
+        # <=100 days ≈ a single quarter already; nothing to difference.
+        r["cumulative"] = bool(span and span > 100)
+    # Pass 2: convert cumulative periods to single-quarter values.
+    for r in rows:
+        if not r["cumulative"]:
+            continue
+        start = _parse_day(r.get("startDate", ""))
+        yr, q = r.get("year"), r.get("quarter")
+        prev = by_pq.get((yr, q - 1)) if isinstance(q, int) else None
+        # Only difference when the prior quarter is the same cumulative
+        # series (same fiscal-year start); otherwise we cannot derive a
+        # clean single quarter, so leave the cumulative value as-is.
+        p_start = _parse_day(prev.get("startDate", "")) if prev else None
+        same_series = bool(
+            prev and p_start and start
+            and abs((p_start - start).days) <= 7)
+        if not same_series:
+            continue
+        for k in _FLOW_KEYS:
+            cum = r.get(f"{k}_cum")
+            pv = prev.get(f"{k}_cum") if prev else None
+            if isinstance(cum, (int, float)) and isinstance(pv, (int, float)):
+                r[k] = cum - pv
 
 
 @dataclass
@@ -127,6 +189,7 @@ class FactStore:
                 "endDate": (r.get("endDate") or "")[:10],
                 "filedDate": (r.get("filedDate") or "")[:10],
             })
+        _deflow_financials(tf.financials)
 
     def _load_peers(self, ticker: str, tf: TickerFacts) -> None:
         p = self._research / ticker / "peers.json"
@@ -178,11 +241,18 @@ class FactStore:
                     f"surprise={e.get('surprise')} "
                     f"({e.get('surprisePercent')}%)")
             for f in tf.financials[:3]:
-                if f["revenue"] is not None or f["net_income"] is not None:
-                    lines.append(
-                        f"[SOURCE: research/{tk}/financials_reported.json] "
-                        f"{tk} FY{f['year']}Q{f['quarter']} "
-                        f"revenue={f['revenue']} net_income={f['net_income']}")
+                if f["revenue"] is None and f["net_income"] is None:
+                    continue
+                cum = ""
+                if f.get("cumulative"):
+                    cum = (f" [fiscal-YTD cumulative through this quarter: "
+                           f"revenue={f.get('revenue_cum')} "
+                           f"net_income={f.get('net_income_cum')}]")
+                lines.append(
+                    f"[SOURCE: research/{tk}/financials_reported.json] "
+                    f"{tk} FY{f['year']}Q{f['quarter']} "
+                    f"single-quarter revenue={f['revenue']} "
+                    f"net_income={f['net_income']}{cum}")
             days = sorted(tf.prices)
             if window:
                 win = [d for d in days if window[0] <= d <= window[1]]
