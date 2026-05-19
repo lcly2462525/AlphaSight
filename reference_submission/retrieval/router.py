@@ -38,15 +38,22 @@ class QueryRouter:
         narrative = bool(_NARRATIVE.search(query))
         event = bool(_EVENT.search(query))
 
+        # news_event (the news_merged atomic-event stream) is curated,
+        # attributed and dated — the highest-signal source for both tasks
+        # and especially review's sign/source/date checks. Its bias is set
+        # ABOVE this route's own `news` multiplier so events always
+        # outrank raw news in fusion, on every route.
         if numeric and not narrative:
             return RouteDecision(
                 w_sparse=0.65, w_dense=0.35, use_fact_store=True,
-                kind_bias={"research": 1.3, "filing": 1.1},
+                kind_bias={"research": 1.3, "filing": 1.1,
+                           "news_event": 1.4},
                 intent="numeric")
         if narrative:
             d = RouteDecision(
                 w_sparse=0.4, w_dense=0.6, use_fact_store=True,
-                kind_bias={"filing": 1.3, "news": 1.1},
+                kind_bias={"filing": 1.3, "news": 1.1,
+                           "news_event": 1.5},
                 intent="narrative")
             if re.search(r"(risk|风险|归因)", query, re.IGNORECASE):
                 d.item_filter = ["item 1a", "item 7"]
@@ -54,6 +61,7 @@ class QueryRouter:
         if event:
             return RouteDecision(
                 w_sparse=0.5, w_dense=0.5, use_fact_store=True,
-                kind_bias={"news": 1.3, "filing": 1.1},
+                kind_bias={"news": 1.3, "filing": 1.1,
+                           "news_event": 1.6},
                 tighten_window=True, intent="event")
-        return RouteDecision()
+        return RouteDecision(kind_bias={"news_event": 1.4})

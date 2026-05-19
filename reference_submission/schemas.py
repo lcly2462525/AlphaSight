@@ -47,7 +47,7 @@ class ReviewIssue(BaseModel):
 class DocMeta(BaseModel):
     """`catalog.jsonl` 一行一条 —— corpus 里每个文件的元数据。"""
     path: str
-    kind: Literal["filing", "news", "research", "social"]
+    kind: Literal["filing", "news", "research", "social", "news_event"]
     symbols: list[str] = Field(default_factory=list)
     timestamp: str
     form: str | None = None

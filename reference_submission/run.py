@@ -78,6 +78,12 @@ def _wire_env(args) -> None:
     os.environ["ALPHASIGHT_PRICES_DIR"] = str(args.prices)
     os.environ["ALPHASIGHT_PRICES_MINUTE_DIR"] = str(args.prices_minute)
     os.environ["ALPHASIGHT_CATALOG_PATH"] = str(args.catalog)
+    # Additive news_merged event-stream supplement, sibling of the
+    # catalog. setdefault: an explicit env (e.g. from run.sh) wins;
+    # load_catalog ignores it if the file is absent.
+    os.environ.setdefault(
+        "ALPHASIGHT_CATALOG_SUPPLEMENT",
+        str(Path(args.catalog).with_name("news_event_catalog.jsonl")))
     os.environ.setdefault("ALPHASIGHT_OUTPUT_DIR", str(args.out))
 
 

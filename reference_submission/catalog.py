@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Iterable
@@ -10,14 +11,25 @@ from typing import Iterable
 from schemas import DocMeta
 
 
-def load_catalog(path: str | Path) -> list[DocMeta]:
-    docs: list[DocMeta] = []
-    with Path(path).open(encoding="utf-8") as f:
+def _read_jsonl_docs(path: Path, docs: list[DocMeta]) -> None:
+    with path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             docs.append(DocMeta.model_validate_json(line))
+
+
+def load_catalog(path: str | Path) -> list[DocMeta]:
+    docs: list[DocMeta] = []
+    _read_jsonl_docs(Path(path), docs)
+    # Optional, strictly-additive supplement (e.g. the news_merged event
+    # stream). The organizer-provided catalog file is only ever read; the
+    # supplement is concatenated when ALPHASIGHT_CATALOG_SUPPLEMENT points
+    # at an existing file, else behaviour is byte-identical to before.
+    sup = os.environ.get("ALPHASIGHT_CATALOG_SUPPLEMENT")
+    if sup and Path(sup).exists():
+        _read_jsonl_docs(Path(sup), docs)
     return docs
 
 
