@@ -397,11 +397,16 @@ class ReviewAgent:
         seen_raw: set[str] = set()
         for c in exact:
             raw = anc.find_raw(c["quote"])
-            if not raw or raw in seen_raw:
+            if not raw:
                 continue
-            issues.append(ReviewIssue(
-                quote=raw, reason=c.get("reason") or self._reason_from(c)))
-            seen_raw.add(raw)
+            k = self._norm_key(raw)
+            if k in seen_raw:
+                continue
+            reason = c.get("reason") or self._reason_from(c)
+            if self._nonissue_reason(reason):
+                continue
+            issues.append(ReviewIssue(quote=raw, reason=reason))
+            seen_raw.add(k)
 
         # 2. Generate-style grounded check (recall, the main path):
         #    lock the subject, build the SAME authoritative context
@@ -427,11 +432,18 @@ class ReviewAgent:
         # per-candidate loop is the precision gate, replacing the blunt
         # cap that was dropping real issues.
         cand: list[tuple[int, str, str]] = []
+        cseen: set[str] = set()
         for q, r in self._grounded_check(evidence, facts, sections):
             raw = anc.find_raw(q)
-            if not raw or raw in seen_raw:
+            if not raw:
                 continue
-            seen_raw.add(raw)
+            k = self._norm_key(raw)
+            # dedup vs already-emitted exact AND vs other candidates
+            if k in seen_raw or k in cseen:
+                continue
+            if self._nonissue_reason(r):       # error 2/3/5 gate
+                continue
+            cseen.add(k)
             cand.append((self._ground_score(r), raw, r))
         cand.sort(key=lambda x: -x[0])
         cand = cand[:self._MAX_CANDIDATES]          # bound LLM calls only
@@ -449,13 +461,67 @@ class ReviewAgent:
         for _, raw, hint in cand:
             if len(issues) >= self._MAX_ISSUES:
                 break
+            k = self._norm_key(raw)
+            if k in seen_raw:
+                continue
             ok = self._verify_issue(raw, hint, primary, facts,
                                     self._match_sx(raw, sx_index))
-            if ok:
+            if ok and not self._nonissue_reason(ok):
                 issues.append(ReviewIssue(quote=raw, reason=ok))
+                seen_raw.add(k)
 
-        _log(f"done ({time.time() - t0:.1f}s, {len(issues)} issues)")
-        return issues[:self._MAX_ISSUES]
+        # Final safety net: collapse any residual duplicate spans.
+        out: list[ReviewIssue] = []
+        fseen: set[str] = set()
+        for it in issues:
+            k = self._norm_key(it.quote)
+            if k in fseen:
+                continue
+            fseen.add(k)
+            out.append(it)
+        _log(f"done ({time.time() - t0:.1f}s, {len(out)} issues)")
+        return out[:self._MAX_ISSUES]
+
+    @staticmethod
+    def _norm_key(text: str) -> str:
+        """Dedup key: strip markdown emphasis/pipes/hashes, collapse
+        whitespace, lowercase. 'same sentence reported N times' (the
+        biggest FP source) all map to one key."""
+        t = re.sub(r"[*#`|>]+", " ", text or "")
+        return re.sub(r"\s+", " ", t).strip().lower()
+
+    # Reasons that signal the candidate is NOT a real injected error.
+    # These are emitted-quote-independent: a deterministic gate that
+    # does not rely on the LLM veto being disciplined.
+    _NONISSUE = re.compile(
+        r"is (actually )?correct\b|are correct\b|"
+        r"report(?:'s|\sis|\sare|ed value is)?[^.]{0,40}\bcorrect\b|"
+        r"approximation is correct|correctly (states|reports|notes|"
+        r"computes|rounds)|no (real |actual |genuine )?"
+        r"(contradiction|error|discrepancy|mismatch|issue)\b|"
+        r"matches the (verified|authoritative|source|reported)|"
+        r"consistent with the (verified|source|fact|filing)|"
+        r"其实(是)?对的|报告[^。]{0,8}(正确|无误|没有错|并无错)|"
+        r"并(无|没有)[^。]{0,8}(错误|矛盾|出入)|实际上[^。]{0,6}(正确|无误)|"
+        # rounding / approximation nitpick
+        r"\brounding\b|roundeded|misleadingly rounded|merely (a )?round|"
+        r"approximation|约等于|四舍五入|differs only by|"
+        # pure wording / labeling nitpick (no factual contradiction)
+        r"\bimprecise\b|misleading (wording|phrasing|term|terminology|"
+        r"expression|label)|ambiguous (wording|phrasing)|"
+        r"should (have )?(been )?(specif|clarif|stated)|措辞|"
+        r"表述[^。]{0,6}(不够|存在|不严|误导)|未(明确)?说明[^。]{0,10}"
+        r"(收盘|口径|该价格)|不够严谨|"
+        # absence-of-evidence dressed up as fabrication
+        r"(no|not|未|没有)[^.。]{0,40}(verified fact|source passage|"
+        r"evidence|filing|检索到|找到|提及)[^.。]{0,30}"
+        r"(fabricat|invent|made up|虚构|不实|编造|捏造)|"
+        r"fabricat(e|ed|es|ion)\b|\binvents?\b|属虚构|数据来源不实",
+        re.IGNORECASE)
+
+    @classmethod
+    def _nonissue_reason(cls, reason: str) -> bool:
+        return bool(reason and cls._NONISSUE.search(reason))
 
     @staticmethod
     def _fmt_sx(sx: dict | None) -> str:
