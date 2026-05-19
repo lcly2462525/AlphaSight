@@ -125,6 +125,9 @@ _SIGNAL_STOP = {"EPS", "FY", "QOQ", "YOY", "SEC", "NYSE", "NASDAQ",
                 "US", "OR", "BY", "IN", "AT", "OF", "TO"}
 
 
+_CJK_RE = re.compile(r'[一-鿿]')
+
+
 def _claim_signal(quote: str) -> str:
     """Extract high-signal tokens (numbers, dates, periods, tickers)
     for a focused BM25 query — strips prose filler that dilutes IDF."""
@@ -275,6 +278,7 @@ class ReviewAgent:
         self._veto_p = load_prompt("verify_exact.md")
         self._grounded_p = load_prompt("grounded_review.md")
         self._filter_p = load_prompt("filter_candidates.md")
+        self._translate_p = load_prompt("translate_claims.md")
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -454,21 +458,58 @@ class ReviewAgent:
                     final.append(s[i:i + 4000])
         return final[:12]
 
+    def _translate_claims(self, claims: list[dict]) -> dict[int, str]:
+        """Chinese reports vs the English corpus: BM25 on Chinese prose
+        barely matches. Batch-translate the Chinese claims to English
+        keyword phrases for the retrieval query ONLY. The emitted quote
+        is still anchored to the original Chinese span elsewhere, so
+        this never touches what is shown to the user. Fail-open: any
+        error returns {} and the caller falls back to signal+prose."""
+        idxs = [i for i, c in enumerate(claims[:24])
+                if _CJK_RE.search(c["quote"])]
+        if not idxs:
+            return {}
+        import json as _json
+        items = _json.dumps(
+            [{"idx": i, "zh": claims[i]["quote"][:200]} for i in idxs],
+            ensure_ascii=False)
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._translate_p.format(items=items)}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+            out: dict[int, str] = {}
+            for e in (data.get("t") or []):
+                if isinstance(e, dict) and e.get("en"):
+                    try:
+                        out[int(e.get("idx"))] = str(e["en"])
+                    except (TypeError, ValueError):
+                        continue
+            return out
+        except Exception:
+            return {}
+
     def _evidence_pool(self, primary: list[str],
                        claims: list[dict]) -> str:
         """ONE strong generate-style retrieval, reused across every
         section. Query = subject + per-claim high-signal tokens
         (numbers/dates/periods/tickers via _claim_signal) so BM25 IDF
         is not diluted by prose filler. Source-attribution claims keep
-        their raw prose (outlet names like Bloomberg/Reuters are exactly
-        what the signal regex strips but what those claims hinge on)."""
+        their raw prose. Chinese claims also contribute an English
+        translation so the English corpus is actually reachable."""
         try:
+            en = self._translate_claims(claims)
             parts: list[str] = list(primary or [])
-            for c in claims[:24]:
+            for i, c in enumerate(claims[:24]):
                 quote = c["quote"]
                 sig = _claim_signal(quote)
                 if sig:
                     parts.append(sig)
+                if i in en:
+                    parts.append(en[i])
                 if _SOURCE_CUE.search(quote):
                     parts.append(quote)
             q = " ".join(parts)
