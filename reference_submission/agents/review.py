@@ -257,6 +257,7 @@ class ReviewAgent:
         self._extract_p = load_prompt("extract_claims.md")
         self._adj_p = load_prompt("adjudicate.md")
         self._veto_p = load_prompt("verify_exact.md")
+        self._grounded_p = load_prompt("grounded_review.md")
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -347,15 +348,14 @@ class ReviewAgent:
             det.append(c)
             used.add(c["quote"])
 
+        # 1. Deterministic exact-tier pre-pass = precision anchors.
+        #    Unambiguous, source-backed, language-agnostic — emit
+        #    directly (through the drop-only veto). These hold precision.
         exact = self._veto_exact(
             [c for c in det if c.get("tier") == "exact"])
-        weak = [c for c in det if c.get("tier") != "exact"]
 
         issues: list[ReviewIssue] = []
         seen_raw: set[str] = set()
-        # exact-tier: structured, unambiguous — emit directly. The old
-        # LLM re-adjudication used to flip confirmed-correct facts into
-        # false issues.
         for c in exact:
             raw = anc.find_raw(c["quote"])
             if not raw or raw in seen_raw:
@@ -364,25 +364,108 @@ class ReviewAgent:
                 quote=raw, reason=c.get("reason") or self._reason_from(c)))
             seen_raw.add(raw)
 
-        # weak-tier (fragile parses) + narrative/source/causal claims
-        # (no deterministic ground truth): retrieve and let the LLM
-        # judge — contradiction only, must cite the refuting span.
-        narr = self._retrieval_candidates(claims, used, primary)
-        batch = weak + narr
-        _log(f"{len(claims)} claims, {len(exact)} exact, "
-             f"{len(weak)} weak, {len(narr)} narrative; adjudicating ...")
-        n_added = 0
-        for q, r in self._adjudicate(batch):
-            if n_added >= self._MAX_NARRATIVE:
+        # 2. Generate-style grounded check (recall, the main path):
+        #    lock the subject, build the SAME authoritative context
+        #    generate uses (exact FactStore block + retrieved passages),
+        #    then walk the report section by section and let the LLM
+        #    compare — language-agnostic, contradiction-only, grounded
+        #    on exact facts so it cannot hallucinate truth.
+        facts = self._facts_block(primary)
+        sections = self._split_sections(anc.raw)
+        _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
+             f"grounded check over {len(sections)} sections ...")
+        for q, r in self._grounded_check(primary, facts, sections):
+            if len(issues) >= self._MAX_ISSUES:
                 break
             raw = anc.find_raw(q)
             if raw and raw not in seen_raw:
                 issues.append(ReviewIssue(quote=raw, reason=r))
                 seen_raw.add(raw)
-                n_added += 1
 
         _log(f"done ({time.time() - t0:.1f}s, {len(issues)} issues)")
         return issues[:self._MAX_ISSUES]
+
+    # ---- generate-style grounded sectioned review ------------------
+
+    def _facts_block(self, primary: list[str]) -> str:
+        try:
+            return self.retriever.fact_store.facts_block(
+                primary or [], None)
+        except Exception:
+            return "(no structured facts resolved)"
+
+    @staticmethod
+    def _split_sections(report: str) -> list[str]:
+        """Split on markdown headers; merge tiny pieces; window very
+        long ones. Falls back to the whole report when header-less."""
+        lines = report.splitlines()
+        secs: list[list[str]] = []
+        cur: list[str] = []
+        for ln in lines:
+            if re.match(r"^\s{0,3}#{1,6}\s", ln) and cur:
+                secs.append(cur)
+                cur = [ln]
+            else:
+                cur.append(ln)
+        if cur:
+            secs.append(cur)
+        out: list[str] = []
+        buf = ""
+        for s in secs:
+            txt = "\n".join(s).strip()
+            if not txt:
+                continue
+            if len(buf) + len(txt) < 1800:
+                buf = (buf + "\n\n" + txt).strip()
+            else:
+                if buf:
+                    out.append(buf)
+                buf = txt
+        if buf:
+            out.append(buf)
+        # window any oversized section
+        final: list[str] = []
+        for s in out or [report]:
+            if len(s) <= 4000:
+                final.append(s)
+            else:
+                for i in range(0, len(s), 3500):
+                    final.append(s[i:i + 4000])
+        return final[:12]
+
+    def _grounded_check(self, primary: list[str], facts: str,
+                        sections: list[str]) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for sec in sections:
+            try:
+                res = self.retriever.search(
+                    sec[:1200], top_k=6, tickers=primary or None)
+                evidence = res.evidence_block()[:3500]
+            except Exception:
+                evidence = "(no passages)"
+            try:
+                raw = chat(
+                    [{"role": "user",
+                      "content": self._grounded_p.format(
+                          facts=facts[:4000], evidence=evidence,
+                          section=sec[:4000])}],
+                    config=self.llm,
+                    **{**self.params,
+                       "response_format": {"type": "json_object"}})
+                data = parse_json_obj(raw)
+            except Exception:
+                continue
+            for it in (data.get("issues", [])
+                       if isinstance(data, dict) else []):
+                if not isinstance(it, dict):
+                    continue
+                q = str(it.get("quote", "")).strip()
+                r = str(it.get("reason", "")).strip()
+                if q and r and q not in seen:
+                    out.append((q, r))
+                    seen.add(q)
+        return out
 
     @staticmethod
     def _reason_from(c: dict) -> str:
@@ -401,7 +484,7 @@ class ReviewAgent:
         out: list[dict] = []
         seen: set[str] = set()
 
-        def add(q: str, kind: str = "other") -> None:
+        def add(q: str, kind: str = "other", sx: dict | None = None) -> None:
             q = Anchored.normalize(q)
             if not self._good_quote(q, anc):
                 return
@@ -411,11 +494,22 @@ class ReviewAgent:
                     seen.remove(old)
                     out[:] = [x for x in out if x["quote"] != old]
                 elif q != old and q in old:
+                    # subsumed; still attach structured fields if the
+                    # longer kept quote lacks them.
+                    if sx:
+                        for x in out:
+                            if x["quote"] == old and not x.get("sx"):
+                                x["sx"] = sx
                     return
             if q not in seen:
                 out.append({"quote": q, "kind": kind,
-                            "claim_type": self._claim_type(q)})
+                            "claim_type": self._claim_type(q),
+                            "sx": sx})
                 seen.add(q)
+            elif sx:
+                for x in out:
+                    if x["quote"] == q and not x.get("sx"):
+                        x["sx"] = sx
 
         for q in self._regex_claims(report):
             add(q, self._claim_type(q))
@@ -431,7 +525,7 @@ class ReviewAgent:
             cl = []
         for c in cl if isinstance(cl, list) else []:
             if isinstance(c, dict) and isinstance(c.get("quote"), str):
-                add(c["quote"], c.get("kind", "other"))
+                add(c["quote"], c.get("kind", "other"), sx=c)
 
         out.sort(key=lambda x: self._claim_priority(x["quote"]), reverse=True)
         return out[:40]
