@@ -33,6 +33,11 @@ _CAND_CAP = {"filing": 60, "news": 400, "social": 200, "research": 40,
              "news_event": 300}
 _CHUNK_BUDGET = 1200
 _TOTAL_BUDGET = 12000
+# the event lane only carries the one-sentence event; for the top few
+# events also pull their SOURCE article and chunk it exactly like raw
+# news, so the highest-signal events come with their original passage
+# (numbers/context the sentence drops), not just the gist.
+_EVENT_ORIG_EXPAND = 3
 
 
 @dataclass
@@ -180,10 +185,39 @@ class HybridRetriever:
         fused = weighted_rrf(sparse, dense, route.w_sparse, route.w_dense,
                              kind_bias=route.kind_bias,
                              item_filter=route.item_filter)
+        # Original-text expansion (independent of the generic `news`
+        # channel, which still runs in `fused`): for the top few events,
+        # read their source article and chunk it through the SAME
+        # chunk_doc(...,"news") window pipeline, then keep the single
+        # window that best matches the query. Missing raw files (ticker
+        # not extracted) degrade silently — doc_text returns "" so the
+        # event sentence still stands alone.
+        orig_lead: list[Chunk] = []
         if event_lead:
-            seen = {(c.path, c.text[:64]) for c in event_lead}
-            fused = event_lead + [c for c in fused
-                                  if (c.path, c.text[:64]) not in seen]
+            seen_src: set[str] = set()
+            for ev in event_lead[:_EVENT_ORIG_EXPAND]:
+                src = ev.path  # = source_paths[0], a real news/<T>/<h>.json
+                if not src or "/" not in src or src in seen_src:
+                    continue
+                seen_src.add(src)
+                o_chunks = chunk_doc(
+                    src, doc_text(str(self.corpus / src), "news"), "news")
+                o_tok = [(c, tokenize(c.text)) for c in o_chunks]
+                o_tok = [(c, t) for c, t in o_tok if t]
+                if not o_tok:
+                    continue
+                o_bm = BM25Okapi([t for _, t in o_tok])
+                o_sc = o_bm.get_scores(q_tok)
+                best_c, best_s = max(zip((c for c, _ in o_tok), o_sc),
+                                     key=lambda kv: kv[1])
+                if best_s > 0:
+                    orig_lead.append(best_c)
+
+        lead = event_lead + orig_lead
+        if lead:
+            seen = {(c.path, c.text[:64]) for c in lead}
+            fused = lead + [c for c in fused
+                            if (c.path, c.text[:64]) not in seen]
 
         q_set = set(q_tok)
         evidence: list[tuple[str, str]] = []
