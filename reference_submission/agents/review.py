@@ -274,6 +274,7 @@ class ReviewAgent:
         self._adj_p = load_prompt("adjudicate.md")
         self._veto_p = load_prompt("verify_exact.md")
         self._grounded_p = load_prompt("grounded_review.md")
+        self._filter_p = load_prompt("filter_candidates.md")
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -392,7 +393,9 @@ class ReviewAgent:
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
              f"grounded check over {len(sections)} sections "
              f"(shared evidence pool) ...")
-        for q, r in self._grounded_check(evidence, facts, sections):
+        grounded = self._filter_candidates(
+            self._grounded_check(evidence, facts, sections))
+        for q, r in grounded:
             if len(issues) >= self._MAX_ISSUES:
                 break
             raw = anc.find_raw(q)
@@ -495,6 +498,35 @@ class ReviewAgent:
                     out.append((q, r))
                     seen.add(q)
         return out
+
+    def _filter_candidates(
+            self, cands: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Batch LLM veto over all grounded candidates at once.
+        Drops confirmed-correct / absence-only items. Fail-open."""
+        if not cands:
+            return cands
+        import json as _json
+        items = _json.dumps(
+            [{"idx": i, "quote": q[:200], "reason": r[:350]}
+             for i, (q, r) in enumerate(cands)],
+            ensure_ascii=False)
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._filter_p.format(items=items)}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+            drop = {entry["idx"]
+                    for entry in (data.get("results") or [])
+                    if isinstance(entry, dict)
+                    and str(entry.get("action", "")).lower() == "drop"}
+            if len(drop) >= len(cands):   # degenerate: distrust, keep all
+                return cands
+            return [c for i, c in enumerate(cands) if i not in drop]
+        except Exception:
+            return cands  # fail-open
 
     @staticmethod
     def _reason_from(c: dict) -> str:
