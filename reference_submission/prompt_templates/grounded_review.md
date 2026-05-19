@@ -24,6 +24,12 @@ Hard rules:
   Absence of support is not contradiction. When unsure, skip.
 - Opinions, forecasts, valuations, and soft narrative are never issues.
 - You must be able to point to the exact fact/passage that conflicts.
+- A report normally contains only a FEW deliberately injected errors.
+  Report at most the 1-2 MOST clear-cut contradictions in this section,
+  not every imperfection. Ignore rounding (≤1% / a few cents), fiscal-
+  year vs calendar-year labeling, single-quarter vs cumulative wording,
+  and restatements. If a section has nothing blatantly wrong, return
+  none — most sections will.
 
 # VERIFIED FACTS
 {facts}
