@@ -264,7 +264,14 @@ class Submission(ExampleSubmission):
     """
 
     def __init__(self) -> None:
+        def _log(m: str) -> None:
+            print(f"[init] {m}", file=sys.stderr, flush=True)
+
+        _log("loading catalog / symbols / prompts ...")
         super().__init__()
+        _log(f"catalog={len(self.catalog)} docs, "
+             f"symbols={len(self.symbols)}; "
+             f"LLM={self.llm.model} @ {self.llm.base_url}")
         from retrieval.base import HybridRetriever
         from retrieval.entity import EntityResolver
         from agents.generate import GenerateAgent
@@ -279,6 +286,7 @@ class Submission(ExampleSubmission):
             self._retriever, self.llm, self._gen_params)
         self._rev_agent = ReviewAgent(
             self._retriever, self.llm, self._rev_params)
+        _log("ready (BM25 retrieval; dense inactive unless index built)")
 
     def generate(self, request: GenerateRequest) -> Report:
         try:

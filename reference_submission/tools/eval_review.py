@@ -94,10 +94,18 @@ def main() -> int:
     args = ap.parse_args()
 
     _load_dotenv(_SELF.parent.parent / ".env")
+    # The judge is DECOUPLED from the pipeline LLM: the pipeline runs on
+    # the local vLLM, scoring runs on the external apicz gateway. Use
+    # ALPHASIGHT_EVAL_* (fall back to the pipeline vars only if unset).
     model = (args.model or os.environ.get("ALPHASIGHT_EVAL_MODEL")
              or "gpt-4.1")
-    os.environ["ALPHASIGHT_LLM_MODEL"] = model  # judge model for cfg
-    cfg = LLMConfig.from_env()
+    cfg = LLMConfig(
+        base_url=(os.environ.get("ALPHASIGHT_EVAL_BASE_URL")
+                  or os.environ.get("ALPHASIGHT_LLM_BASE_URL")),
+        model=model,
+        api_key=(os.environ.get("ALPHASIGHT_EVAL_API_KEY")
+                 or os.environ.get("OPENAI_API_KEY") or "sk-none"),
+    )
     tpl = load_prompt("eval_match.md")
 
     preds = _rows(args.pred)

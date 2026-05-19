@@ -116,6 +116,16 @@ def chat(
     cfg = config or LLMConfig.from_env()
     from openai import OpenAI
 
+    # A None timeout lets a dead/unreachable endpoint hang the whole run
+    # silently (looks "stuck after using Submission"). Default to a hard
+    # per-request cap so failures surface fast and the retry loop and the
+    # ExampleSubmission fallback can engage. Override via env or arg.
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("ALPHASIGHT_LLM_TIMEOUT", "120"))
+        except ValueError:
+            timeout = 120.0
+
     client = OpenAI(base_url=cfg.base_url, api_key=cfg.api_key, timeout=timeout)
 
     kwargs: dict[str, Any] = {

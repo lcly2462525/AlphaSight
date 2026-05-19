@@ -26,7 +26,17 @@ class GenerateAgent:
         self._prompt = load_prompt("grounded_generate.md")
 
     def run(self, topic: str) -> str:
+        import sys
+        import time
+
+        def _log(m: str) -> None:
+            print(f"[gen] {m}", file=sys.stderr, flush=True)
+
+        t0 = time.time()
+        _log("retrieving evidence ...")
         res = self.retriever.search(topic, top_k=12)
+        _log(f"retrieved {len(res.evidence)} passages "
+             f"({time.time() - t0:.1f}s); calling LLM ...")
         prompt = self._prompt.format(
             topic=topic,
             facts_block=res.facts or "(none)",
@@ -37,8 +47,12 @@ class GenerateAgent:
         if not isinstance(draft, str) or not draft.strip():
             raise RuntimeError("empty generation")
         if os.environ.get("ALPHASIGHT_GEN_NO_AUDIT") == "1":
+            _log(f"done ({time.time() - t0:.1f}s, no audit)")
             return draft
-        return self._self_audit(topic, draft)
+        _log("self-audit ...")
+        out = self._self_audit(topic, draft)
+        _log(f"done ({time.time() - t0:.1f}s)")
+        return out
 
     def _self_audit(self, topic: str, draft: str) -> str:
         tickers = self.retriever.entity.resolve(topic)

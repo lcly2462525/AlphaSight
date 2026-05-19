@@ -206,6 +206,14 @@ class ReviewAgent:
         return []
 
     def run(self, report: str) -> list[ReviewIssue]:
+        import sys
+        import time
+
+        def _log(m: str) -> None:
+            print(f"[rev] {m}", file=sys.stderr, flush=True)
+
+        t0 = time.time()
+        _log("extracting claims (LLM) ...")
         claims = self._extract(report)
         primary = self._primary_ticker(report)
 
@@ -217,15 +225,19 @@ class ReviewAgent:
                 continue
             candidates.append(c)
             used.add(c["quote"])
+        _log(f"{len(claims)} claims, {len(candidates)} deterministic "
+             f"candidates; retrieving for the rest ...")
         for c in self._retrieval_candidates(claims, used):
             candidates.append(c)
 
+        _log(f"adjudicating {len(candidates)} candidates (LLM) ...")
         issues: list[ReviewIssue] = []
         seen: set[str] = set()
         for q, r in self._adjudicate(candidates):
             if q in report and q not in seen:
                 issues.append(ReviewIssue(quote=q, reason=r))
                 seen.add(q)
+        _log(f"done ({time.time() - t0:.1f}s, {len(issues)} issues)")
         return issues
 
     # ---- step 1: extract -------------------------------------------

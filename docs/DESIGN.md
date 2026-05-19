@@ -337,10 +337,20 @@ reference_submission/
 
 ## 9. 运行配置 & 评测
 
-**LLM 网关（apicz 资源池）**
-- OpenAI 兼容端点 `https://apicz.boyuerichdata.com/v1`，默认模型
-  `gpt-4.1`（稳定；gpt-5 系列禁用 presence/frequency_penalty 等参数，
-  故不默认）。配置走 `.env`（**git 忽略，不入库**），`run.py` 自动加载。
+**双 LLM 通道（关键：pipeline 与评测分离）**
+- **Pipeline（generate/review）= 本地 vLLM**：云端 `vllm.sh` 起
+  `Qwen3-30B-A3B-Instruct-2507` 于 `http://localhost:8000/v1`。云端机器
+  不保证有外网，pipeline 指外部网关会**整轮静默挂死**（"卡在 using
+  Submission" 即此：构造完到首个请求间无输出，LLM 调用又无超时）。
+- **评测裁判 = 独立 apicz 网关**：`tools/eval_review.py` 走
+  `ALPHASIGHT_EVAL_BASE_URL`/`_API_KEY`/`_MODEL`（gpt-4.1），与 pipeline
+  的 `ALPHASIGHT_LLM_*` 完全解耦——离线打分可在有外网的机器跑。
+- `chat()` 默认硬超时 `ALPHASIGHT_LLM_TIMEOUT`(120s)：死端点快速失败
+  → 重试触发 → 最终回退 ExampleSubmission，不再无限静默。
+- 全程 stderr 进度日志（`[init]`/`[gen]`/`[rev]`）：catalog 加载、
+  检索、LLM 调用各阶段可见，"静默期"不再被误判为卡死/建索引。
+- 配置走 `.env`（私有库，已纳入 git，云端 `git pull` 即得），
+  `run.py` 自动加载。
 - **强制重试**：资源池会偶发 429/5xx，`llm.chat()` 包了重试
   （`_create_with_retry`）：默认 5–6 次、间隔 30s，仅对
   408/409/429/5xx/连接超时重试，400/401 等立即抛出；重试打 stderr。
