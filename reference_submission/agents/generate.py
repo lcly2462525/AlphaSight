@@ -187,7 +187,20 @@ class GenerateAgent:
         _log(f"subject={subject}; retrieving ...")
         res = self.retriever.search(topic, top_k=12, tickers=subject,
                                     require_subject=True)
+        from tools.financial_analysis import FinancialToolAgent
+
+        tool_block, tool_trace = FinancialToolAgent(
+            self.retriever.fact_store).plan_and_run(
+                subject, topic, self.llm, self.params)
+        for tr in tool_trace:
+            _log(f"tool-agent: {tr}")
+        facts_block = res.facts or "(none)"
+        if tool_block and tool_block != "(no tool output)":
+            facts_block = (
+                f"{facts_block}\n\n# DETERMINISTIC FINANCIAL TOOL OUTPUT\n"
+                f"{tool_block}")
         _log(f"retrieved {len(res.evidence)} passages "
+             f"and built finance tool pack "
              f"({time.time() - t0:.1f}s); calling LLM ...")
         subject_block = (
             f"This report's subject company is **{', '.join(subject)}**. "
@@ -198,7 +211,7 @@ class GenerateAgent:
         prompt = self._prompt.format(
             topic=topic,
             subject_block=subject_block,
-            facts_block=res.facts or "(none)",
+            facts_block=facts_block,
             evidence_block=res.evidence_block(),
         )
         draft = chat([{"role": "user", "content": prompt}],
