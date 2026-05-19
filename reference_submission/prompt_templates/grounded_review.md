@@ -36,18 +36,7 @@ Hard rules:
 
 # OUTPUT
 Return JSON only:
-{{"issues": [{{"quote": "<verbatim substring of the REPORT SECTION, copied EXACTLY incl. markdown/newlines>", "verdict": "WRONG", "reason": "<what is wrong + the correct value, citing the specific VERIFIED FACT or passage that contradicts it>"}}]}}
+{{"issues": [{{"quote": "<verbatim substring of the REPORT SECTION, copied EXACTLY incl. markdown/newlines>", "reason": "<what is wrong + the correct value, citing the specific VERIFIED FACT or passage that contradicts it>"}}]}}
 - `quote` MUST be an exact substring of the REPORT SECTION (a full
   sentence, bullet, or table row — not a bare number/date fragment).
-- `verdict` MUST be "WRONG". Only include an item if the report is
-  factually wrong. If you verified something and it is correct,
-  set verdict to "CORRECT" or omit it entirely — the code will discard
-  it. Never include an item whose reason says "correctly", "matches",
-  "aligns with", "is acceptable", or similar confirmations.
 - Return {{"issues": []}} if nothing in this section is contradicted.
-
-CRITICAL — Anti-example. DO NOT do this:
-{{"issues": [{{"quote": "revenue was $45.87B", "verdict": "CORRECT",
-  "reason": "The report correctly states revenue as $45.87B per VERIFIED FACTS."}}]}}
-→ The statement was verified as CORRECT. It must NOT be in issues (or set verdict="CORRECT" and the code drops it).
-Correct output when everything checks out: {{"issues": []}}
