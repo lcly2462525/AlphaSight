@@ -489,6 +489,10 @@ class ReviewAgent:
                        if isinstance(data, dict) else []):
                 if not isinstance(it, dict):
                     continue
+                # Drop anything the LLM itself labelled CORRECT.
+                verdict = str(it.get("verdict", "WRONG")).strip().upper()
+                if verdict != "WRONG":
+                    continue
                 q = str(it.get("quote", "")).strip()
                 r = str(it.get("reason", "")).strip()
                 if q and r and q not in seen:
