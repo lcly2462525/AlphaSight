@@ -119,7 +119,7 @@ def _claim_metric(text: str) -> str | None:
 
 _SIGNAL_RE = re.compile(
     r'\$[\d.,]+|\b\d+\.\d+\b|\b20\d{2}\b|Q[1-4]|FY\s?\d{2,4}|'
-    r'\d+(?:\.\d+)?\s*%|\b[A-Z]{2,5}\b')
+    r'\d+(?:\.\d+)?\s*%|\b\d{2,}\b|\b[A-Z]{2,5}\b')
 _SIGNAL_STOP = {"EPS", "FY", "QOQ", "YOY", "SEC", "NYSE", "NASDAQ",
                 "CIK", "GAAP", "USD", "CEO", "CFO", "AND", "THE",
                 "US", "OR", "BY", "IN", "AT", "OF", "TO"}
@@ -532,10 +532,14 @@ class ReviewAgent:
                 **{**self.params,
                    "response_format": {"type": "json_object"}})
             data = parse_json_obj(raw)
-            drop = {entry["idx"]
-                    for entry in (data.get("results") or [])
-                    if isinstance(entry, dict)
-                    and str(entry.get("action", "")).lower() == "drop"}
+            drop: set[int] = set()
+            for entry in (data.get("results") or []):
+                if (isinstance(entry, dict)
+                        and str(entry.get("action", "")).lower() == "drop"):
+                    try:
+                        drop.add(int(entry.get("idx")))
+                    except (TypeError, ValueError):
+                        continue
             if len(drop) >= len(cands):   # degenerate: distrust, keep all
                 return cands
             return [c for i, c in enumerate(cands) if i not in drop]
