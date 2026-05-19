@@ -371,10 +371,12 @@ class ReviewAgent:
         #    compare — language-agnostic, contradiction-only, grounded
         #    on exact facts so it cannot hallucinate truth.
         facts = self._facts_block(primary)
+        evidence = self._evidence_pool(primary, claims)
         sections = self._split_sections(anc.raw)
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
-             f"grounded check over {len(sections)} sections ...")
-        for q, r in self._grounded_check(primary, facts, sections):
+             f"grounded check over {len(sections)} sections "
+             f"(shared evidence pool) ...")
+        for q, r in self._grounded_check(evidence, facts, sections):
             if len(issues) >= self._MAX_ISSUES:
                 break
             raw = anc.find_raw(q)
@@ -433,17 +435,28 @@ class ReviewAgent:
                     final.append(s[i:i + 4000])
         return final[:12]
 
-    def _grounded_check(self, primary: list[str], facts: str,
+    def _evidence_pool(self, primary: list[str],
+                       claims: list[dict]) -> str:
+        """ONE strong generate-style retrieval, reused across every
+        section. Per-section `sec[:1200]` queries were Chinese prose vs
+        English filings (weak BM25, fragmented). The query here is the
+        subject + the extracted claims — claims carry the specific
+        numbers/dates/English entities that actually hit source text."""
+        try:
+            q = " ".join((primary or [])
+                         + [c["quote"] for c in claims[:24]])
+            res = self.retriever.search(
+                q[:4000], top_k=14, tickers=primary or None)
+            ev = res.evidence_block()
+            return ev[:7000] if ev else "(no passages retrieved)"
+        except Exception:
+            return "(no passages retrieved)"
+
+    def _grounded_check(self, evidence: str, facts: str,
                         sections: list[str]) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []
         seen: set[str] = set()
         for sec in sections:
-            try:
-                res = self.retriever.search(
-                    sec[:1200], top_k=6, tickers=primary or None)
-                evidence = res.evidence_block()[:3500]
-            except Exception:
-                evidence = "(no passages)"
             try:
                 raw = chat(
                     [{"role": "user",
