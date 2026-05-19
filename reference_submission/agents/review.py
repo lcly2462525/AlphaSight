@@ -319,10 +319,11 @@ class ReviewAgent:
             return primary
         return []
 
-    # Verification (stage 2) is the precision gate now, not a cap.
-    # _MAX_ISSUES is a generous safety net; _MAX_CANDIDATES only bounds
-    # how many per-candidate LLM verify calls we make (cost, not P).
-    _MAX_ISSUES = 6
+    # Stage-2 is a VETO (drop-only), not a precision gate, so the cap
+    # must not be the limiter — restore the pre-c284915 budget (8). The
+    # blunt cap=4 cut true positives faster than false ones. The veto
+    # is the filter; _MAX_CANDIDATES only bounds verify LLM calls.
+    _MAX_ISSUES = 8
     _MAX_CANDIDATES = 16
     _MAX_NARRATIVE = 4       # (legacy, unused by the propose-verify path)
 
@@ -465,12 +466,12 @@ class ReviewAgent:
 
     def _verify_issue(self, quote: str, hint: str, primary: list[str],
                       facts: str, parse: str = "") -> str | None:
-        """Stage-2 precision gate: focused, per-candidate fact-check.
-        Pull evidence targeted at THIS quote and let the LLM confirm or
-        reject. `parse` is the first-stage structured reading of the
-        claim (may be wrong — the verifier re-judges). Returns the
-        confirmed reason, or None to drop. Any failure or non-confirm
-        => drop (precision-first)."""
+        """Stage-2 VETO (not a strict gate). Default KEEP — only drop a
+        candidate the focused check says is clearly NOT an error. This
+        preserves the pre-c284915 recall (a strict default-reject gate
+        was cutting true positives faster than it cut false ones).
+        Returns the (possibly refined) reason to keep, or None to drop.
+        Any LLM/parse failure => KEEP with the first-stage reason."""
         try:
             res = self.retriever.search(
                 quote[:600], top_k=5, tickers=primary or None)
@@ -489,13 +490,15 @@ class ReviewAgent:
                    "response_format": {"type": "json_object"}})
             data = parse_json_obj(raw)
         except Exception:
-            return None
+            return (hint or "").strip() or None       # fail-open: keep
         if not isinstance(data, dict):
+            return (hint or "").strip() or None
+        if str(data.get("verdict", "")).strip().lower() == "drop":
             return None
-        if str(data.get("verdict", "")).strip().lower() != "confirm":
-            return None
+        # keep: prefer the verifier's refined reason, else the
+        # first-stage hint.
         reason = str(data.get("reason", "")).strip()
-        return reason or None
+        return reason or (hint or "").strip() or None
 
     @staticmethod
     def _ground_score(reason: str) -> int:
