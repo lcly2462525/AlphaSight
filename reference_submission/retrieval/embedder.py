@@ -118,23 +118,9 @@ class Embedder:
 
     def _encode_endpoint(self, texts: list[str]):
         from openai import OpenAI
-        # Bounded timeout + no retries: a slow/contended embeddings
-        # server must DEGRADE to BM25, never hang the whole review.
-        # (The SDK default is ~10min; with one embed call per evidence
-        # pool + one per verify candidate, that reads as "stuck".)
-        try:
-            to = float(os.environ.get("ALPHASIGHT_EMBED_TIMEOUT", "20"))
-        except ValueError:
-            to = 20.0
-        client = OpenAI(
-            base_url=self._ep_url,
-            api_key=os.environ.get("OPENAI_API_KEY", "sk-none"),
-            timeout=to, max_retries=0)
-        # Cap input size — a 4000-char query wastes the small 0.6B
-        # embedder and can stall it; instruction embedders truncate
-        # anyway. 2000 chars ≈ plenty for retrieval.
-        capped = [t[:2000] for t in texts]
-        resp = client.embeddings.create(model=self._ep_model, input=capped)
+        client = OpenAI(base_url=self._ep_url,
+                        api_key=os.environ.get("OPENAI_API_KEY", "sk-none"))
+        resp = client.embeddings.create(model=self._ep_model, input=texts)
         return [d.embedding for d in resp.data]
 
     def _encode_st(self, texts: list[str], batch_size: int):
