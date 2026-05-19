@@ -261,44 +261,74 @@ class ReviewAgent:
         self._verify_p = load_prompt("verify_issue.md")
 
     def _primary_ticker(self, report: str) -> list[str]:
-        """The company the report is about. Single/two-letter tickers
-        false-match common words, so rank by (frequency, length) over
-        the whole report and prefer a `(TICKER)` / `$TICKER` mention —
-        not the alphabetically-first resolved symbol."""
+        """The ONE company the report is about. These reports open with
+        `# Company Name (TICKER) — ...`; peers appear later only as
+        comparisons. Returning the peer list as 'subject' (the old bug)
+        made the deterministic checks compare a report against a peer's
+        facts — a huge false-positive source (AMD report vs NVDA.csv).
+        So: lock the title ticker as a SINGLE subject; multi only for an
+        explicit sector basket `(A, B, C)`."""
         universe = set(self.retriever.subject_universe())
-        explicit: list[str] = []
-        patterns = [
-            r"\((?:NYSE|NASDAQ|Nasdaq|纳斯达克|纽交所)\s*[:：]\s*([A-Z.]{1,6})\)",
-            r"(?:NYSE|NASDAQ|Nasdaq|纳斯达克|纽约证券交易所|股票代码|交易代码|代码)\s*[:：]?\s*([A-Z.]{1,6})",
-            r"\((?:[A-Z]{2,5},\s*)+[A-Z]{2,5}\)",
-            r"Coverage:\s*([A-Z.,\s]+)\s*[—-]",
-        ]
-        for pat in patterns:
-            for m in re.finditer(pat, report):
-                toks = re.findall(r"\b[A-Z.]{1,6}\b", m.group(0))
-                for t in toks:
-                    if len(t) >= 2 and t in universe and t not in explicit:
-                        explicit.append(t)
-        if not explicit:
-            head = report[:1500]
-            for t in re.findall(r"\b[A-Z.]{2,6}\b", head):
-                if t in universe and t not in {"NYSE", "NASDAQ", "SEC", "CIK"} \
-                        and t not in explicit:
-                    explicit.append(t)
-        if explicit:
-            # Return several only for deliberate sector-comparison notes.
-            return explicit[:6] if len(explicit) > 1 else explicit
+        # Normalize fullwidth parens/colon/comma so Chinese titles like
+        # `（NYSE：BA）` / `（NFLX）` parse the same as ASCII.
+        _fw = str.maketrans("（）：，", "():,")
+        head = report[:1500].translate(_fw)
 
+        # 1. Exchange-qualified ticker anywhere near the top.
+        m = re.search(
+            r"\(\s*(?:NYSE|NASDAQ|Nasdaq|纳斯达克|纽交所)\s*[:：]?\s*"
+            r"([A-Z.]{1,6})\s*\)", head)
+        if m and m.group(1) in universe:
+            return [m.group(1)]
+
+        # 2. The (TICKER) in the title / first heading line.
+        for line in head.splitlines()[:6]:
+            if "(" not in line:
+                continue
+            for t in re.findall(r"\(\s*([A-Z]{1,6}(?:\.[A-Z])?)\s*\)", line):
+                if t in universe:
+                    return [t]
+            if line.strip().startswith("#"):
+                break
+
+        # 2b. Title names the company, not the ticker (Chinese reports:
+        #     `# 微软公司（Microsoft Corporation）...`). Resolve the
+        #     heading line ONLY (peers appear in the body, never here).
+        for line in head.splitlines()[:4]:
+            s = line.strip().lstrip("#").strip()
+            if not s:
+                continue
+            try:
+                res = [t for t in self.retriever.entity.resolve(s)
+                       if t in universe]
+            except Exception:
+                res = []
+            if res:
+                res.sort(key=lambda t: (s.count(t), len(t)), reverse=True)
+                return [res[0]]
+            break
+
+        # 3. Explicit sector-comparison basket: "(AAA, BBB, CCC)".
+        mb = re.search(r"\((?:[A-Z]{2,5},\s*)+[A-Z]{2,5}\)", head)
+        if mb:
+            bk = [t for t in re.findall(r"\b[A-Z.]{2,5}\b", mb.group(0))
+                  if t in universe]
+            if bk:
+                return bk[:6]
+
+        # 4. Fallback: most-frequent resolved symbol that is explicitly
+        #    written as (T)/$T — never just the first peer mentioned.
         allt = self.retriever.entity.resolve(report)
         if not allt:
             return []
 
         def score(t: str) -> tuple:
-            explicit = (f"({t})" in report) or (f"${t}" in report)
-            return (explicit, report.count(t), len(t))
+            expl = (f"({t})" in report) or (f"${t}" in report)
+            return (expl, report.count(t), len(t))
 
         best = max(allt, key=score)
-        if len(best) <= 2 and not ((f"({best})" in report) or (f"${best}" in report)):
+        if len(best) <= 2 and not ((f"({best})" in report)
+                                   or (f"${best}" in report)):
             return []
         return [best]
 
@@ -342,9 +372,12 @@ class ReviewAgent:
 
         det: list[dict] = []
         used: set[str] = set()
+        # _period_end_candidates dropped: reports label quarters by
+        # calendar end (2025-09-30) while non-calendar fiscal filers
+        # (AVGO/NVDA/...) end elsewhere — a labeling convention, not an
+        # injected error. It was a pure exact-tier FP generator.
         for c in (self._numeric_candidates(claims, primary)
                   + self._date_candidates(claims, primary)
-                  + self._period_end_candidates(claims, primary)
                   + self._price_candidates(claims, primary)
                   + self._peer_candidates(claims, primary)
                   + self._arithmetic_candidates(claims)
