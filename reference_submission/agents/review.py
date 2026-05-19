@@ -394,7 +394,7 @@ class ReviewAgent:
              f"grounded check over {len(sections)} sections "
              f"(shared evidence pool) ...")
         grounded = self._filter_candidates(
-            self._grounded_check(evidence, facts, sections))
+            self._grounded_check(evidence, facts, sections), facts)
         for q, r in grounded:
             if len(issues) >= self._MAX_ISSUES:
                 break
@@ -500,9 +500,14 @@ class ReviewAgent:
         return out
 
     def _filter_candidates(
-            self, cands: list[tuple[str, str]]) -> list[tuple[str, str]]:
-        """Batch LLM veto over all grounded candidates at once.
-        Drops confirmed-correct / absence-only items. Fail-open."""
+            self, cands: list[tuple[str, str]],
+            facts: str) -> list[tuple[str, str]]:
+        """Batch independent verification over all grounded candidates.
+        The filter re-checks each quote against the VERIFIED FACTS
+        itself (not by reading the reason wording), so mixed reasons
+        ("matches X but Y is wrong") are no longer mis-dropped.
+        Passage-grounded source/timeline issues are exempted via the
+        prompt. Fail-open — exception or drop-all keeps everything."""
         if not cands:
             return cands
         import json as _json
@@ -513,7 +518,8 @@ class ReviewAgent:
         try:
             raw = chat(
                 [{"role": "user",
-                  "content": self._filter_p.format(items=items)}],
+                  "content": self._filter_p.format(
+                      facts=facts[:4000], items=items)}],
                 config=self.llm,
                 **{**self.params,
                    "response_format": {"type": "json_object"}})

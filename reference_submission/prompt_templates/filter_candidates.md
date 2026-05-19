@@ -1,23 +1,36 @@
-You are reviewing a list of candidate issues flagged in an equity-research
-report. For each candidate, decide: does the reason actually describe a
-REAL factual error in the report?
+You are an independent fact-checker. Below are candidate issues flagged
+in an equity-research report, plus the authoritative VERIFIED FACTS
+(exact values from the structured corpus: earnings.json, financials,
+prices, peers, filing catalog). These facts are correct.
 
-DROP a candidate if the reason clearly says one of:
-1. The value is "correct", "correctly stated", "matches", "aligns with",
-   "consistent with", "is acceptable" — the issue is logically backwards
-   (the LLM verified the claim as right but still flagged it as an issue)
-2. Only "no source passage / no VERIFIED FACT / not provided" with no
-   specific contradicting number, date, or direction given — absence of
-   evidence is not a contradiction
-3. The claim is an opinion, forecast, valuation, price target, or soft
-   narrative — these are never factual errors
-4. The quote is not an assertive factual statement (it is a question,
-   disclaimer, hedge, or forward-looking statement)
+Do NOT judge by the wording of the candidate's `reason`. Independently
+check each candidate's `quote` against the VERIFIED FACTS yourself.
 
-KEEP everything else. When unsure, KEEP.
-Fail toward KEEP — you need a clear reason to drop.
+For each candidate, decide KEEP or DROP:
 
-Candidates (JSON array):
+KEEP if:
+- The number / date / direction in the `quote` clearly contradicts a
+  specific VERIFIED FACT (a different value, a reversed beat/miss or
+  up/down, a wrong filing/event date, a peer not in the list).
+- The VERIFIED FACTS do not cover it, BUT the `reason` cites a specific
+  source passage sentence giving a concrete contradicting value, date,
+  or attributed source (e.g. wrong outlet, wrong filing). Source-
+  attribution and timeline errors are often grounded this way — keep them.
+
+DROP if:
+- The `quote` is consistent with / matches the VERIFIED FACTS (the
+  report is actually right — the candidate is logically backwards).
+- The only basis is absence of evidence ("no VERIFIED FACT / no source
+  passage provides ...") with no concrete contradicting value given.
+- It is an opinion, forecast, valuation, price target, or soft narrative.
+- The `quote` is not an assertive factual statement.
+
+When genuinely unsure, KEEP. Fail toward KEEP.
+
+# VERIFIED FACTS
+{facts}
+
+# CANDIDATES (JSON array)
 {items}
 
 Return JSON only:
