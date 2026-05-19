@@ -29,6 +29,12 @@ from retrieval.chunking import chunk_doc                  # noqa: E402
 from retrieval.embedder import Embedder                   # noqa: E402
 from retrieval.textutil import doc_text                   # noqa: E402
 
+try:
+    from tqdm import tqdm                                 # noqa: E402
+except ImportError:                                       # pragma: no cover
+    def tqdm(it, **_):                                    # type: ignore
+        return it
+
 _NEWS_CAP = 40000  # cap embedded news chunks to keep index bounded
 
 
@@ -54,7 +60,7 @@ def main() -> int:
     texts: list[str] = []
     meta: list[dict] = []
     news_seen = 0
-    for m in metas:
+    for m in tqdm(metas, desc="chunking", unit="doc"):
         if m.kind == "news":
             if news_seen >= _NEWS_CAP:
                 continue
@@ -75,10 +81,15 @@ def main() -> int:
     import faiss
     import numpy as np
 
-    vecs = emb.encode(texts, batch_size=args.batch_size)
-    if vecs is None:
-        print("encode failed — skipping dense index.")
-        return 0
+    vecs: list = []
+    bs = max(1, args.batch_size)
+    for i in tqdm(range(0, len(texts), bs), desc="embedding",
+                  unit="batch"):
+        part = emb.encode(texts[i:i + bs], batch_size=bs)
+        if part is None:
+            print("encode failed — skipping dense index.")
+            return 0
+        vecs.extend(part)
     arr = np.asarray(vecs, dtype="float32")
     index = faiss.IndexFlatIP(arr.shape[1])
     index.add(arr)

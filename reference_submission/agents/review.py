@@ -376,6 +376,11 @@ class ReviewAgent:
         #    compare — language-agnostic, contradiction-only, grounded
         #    on exact facts so it cannot hallucinate truth.
         facts = self._facts_block(primary, anc.raw)
+        try:
+            _dense = self.retriever.dense_active()
+        except Exception:
+            _dense = False
+        _log(f"retrieval: {'BM25+DENSE embeddings' if _dense else 'BM25-only'}")
         evidence = self._evidence_pool(primary, claims)
         sections = self._split_sections(anc.raw)
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "

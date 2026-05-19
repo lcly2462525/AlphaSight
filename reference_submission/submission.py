@@ -286,7 +286,11 @@ class Submission(ExampleSubmission):
             self._retriever, self.llm, self._gen_params)
         self._rev_agent = ReviewAgent(
             self._retriever, self.llm, self._rev_params)
-        _log("ready (BM25 retrieval; dense inactive unless index built)")
+        if self._retriever.dense_active():
+            _log("ready (retrieval: BM25 + DENSE embeddings active)")
+        else:
+            _log("ready (retrieval: BM25-only; dense index/embeddings "
+                 "unavailable)")
 
     def generate(self, request: GenerateRequest) -> Report:
         try:

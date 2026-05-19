@@ -56,6 +56,17 @@ class HybridRetriever:
             from retrieval.embedder import Embedder
             self._dense = DenseIndex(Path(index_dir), Embedder())
 
+    def dense_active(self) -> bool:
+        """True iff a prebuilt dense index AND a working embedding
+        backend are both present — i.e. retrieval will fuse embeddings,
+        not run BM25-only. Probed once for logging."""
+        d = self._dense
+        try:
+            return bool(d is not None and d.ready
+                        and d.embedder.available)
+        except Exception:
+            return False
+
     def _window(self, query: str) -> tuple[str, str] | None:
         ys = sorted(set(_YEAR_RE.findall(query)))
         if not ys:
