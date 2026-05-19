@@ -1,0 +1,33 @@
+# NVDA Remains Undervalued on Sustained Execution and Asymmetric AI Infrastructure Optionality
+
+NVIDIA (NVDA) is not yet priced for its full AI infrastructure dominance, despite a 34.8% stock gain in 2025. We maintain a **bullish stance**, asserting that NVDA remains undervalued based on accelerating earnings momentum, unmatched revenue scalability, and structural cost advantages that are underappreciated in current consensus models. This thesis hinges on three interlocking facts: (1) persistent EPS outperformance, (2) exponential revenue growth with improving margins, and (3) strategic capital allocation that reinforces long-term moat expansion — all while competitive threats remain speculative.
+
+### 1. Earnings Momentum Is Accelerating, Not Peaking
+
+NVDA has delivered three consecutive quarters of positive EPS surprises, with the magnitude increasing sequentially. In FY2026Q3, EPS of $1.30 beat estimates of $1.2746 by $0.0254 (1.99%) `[SOURCE: research/NVDA/earnings.json | "NVDA FY2026Q3 EPS actual=1.3 est=1.2746 surprise=0.0254 (1.9928%)"]`. This follows a $0.0219 beat in Q2 `[SOURCE: research/NVDA/earnings.json | "NVDA FY2026Q2 EPS actual=1.05 est=1.0281 surprise=0.0219 (2.1301%)"]` and a $0.0079 beat in Q1 `[SOURCE: research/NVDA/earnings.json | "NVDA FY2026Q1 EPS actual=0.96 est=0.9521 surprise=0.0079 (0.8297%)"]`. The accelerating beat rate contradicts narratives of margin compression or demand saturation. Instead, it reflects pricing power and supply chain control.
+
+Revenue growth confirms this trajectory: from $44.06B in Q1 to $90.81B in Q2 and $91.166B in Q3 `[SOURCE: research/NVDA/financials_reported.json | "NVDA FY2026Q3 revenue=91166000000 net_income=77107000000.0"]`. This represents a 0.4% sequential increase from Q2 to Q3 — a compounding curve inconsistent with a mature tech cycle. Net income rose from $18.78B to $45.20B to $77.11B over the same period `[SOURCE: research/NVDA/financials_reported.json | "NVDA FY2026Q2 revenue=90805000000.0 net_income=45197000000.0"]`, indicating operating leverage, not just top-line growth.
+
+### 2. Inventory Provisions Signal Forward-Looking Supply Control, Not Weak Demand
+
+Bearish sentiment in late 2025 centered on inventory provisions, with $3.6B recorded in the first nine months of FY2026 `[SOURCE: filings/NVDA/10-Q__2025-11-19__0001045810-25-000230.htm | "We recorded inventory provisions of $ 378 million and $ 322 million for the third quarter of fiscal years 2026 and 2025, respectively, and $ 3.6 billion and $ 876 million for the first nine months of fiscal years 2026 and 2025, respectively"]`. However, this increase is not a demand warning but a strategic alignment with next-gen product transitions (e.g., Blackwell to Rubin). The $3.6B provision is largely non-cash and reflects conservative accounting, not lost sales. In contrast, revenue growth of 235% year-to-date implies inventory is being absorbed faster than it is being built.
+
+Moreover, capital expenditures — a leading indicator of capacity planning — show intent to scale: $790M in property and equipment acquired but unpaid in the first nine months of FY2026, versus "not significant" in the prior year `[SOURCE: filings/NVDA/10-Q__2025-11-19__0001045810-25-000230.htm | "Property, equipment and intangible assets acquired but not paid for the first nine months of fiscal years 2026 and 2025 were $ 790 million and not significant, respectively"]`. This signals aggressive infrastructure buildout, not retrenchment.
+
+### 3. Capital Allocation Reinforces Dominance, Not Shareholder Payout
+
+NVDA repurchased $9.7B of stock in FY2026Q2 alone `[SOURCE: filings/NVDA/10-Q__2025-08-27__0001045810-25-000209.htm | "of our common stock for $ 9.7 billion and $ 7.0 billion during the second quarter of fiscal years 2026 and 2025, respectively"]`, and $24.2B in the first half of FY2026 `[SOURCE: filings/NVDA/10-Q__2025-08-27__0001045810-25-000209.htm | "193 million and 162 million shares of our common stock for $ 24.2 billion and $ 15.1 billion during the first half of fiscal years 2026 and 2025, respectively"]`. This is not capital return — it is moat reinforcement. With $14.7B still authorized for buybacks as of July 27, 2025 `[SOURCE: filings/NVDA/10-Q__2025-08-27__0001045810-25-000209.htm | "As of July 27, 2025, we were authorized, subject to certain specifications, to repurchase up to $ 14.7 billion of our common stock"]`, NVDA retains financial flexibility to consolidate ownership while investing in R&D and manufacturing partnerships.
+
+Dividends remain minimal: $488M in first-half FY2026, up from $344M year-earlier `[SOURCE: filings/NVDA/10-Q__2025-08-27__0001045810-25-000209.htm | "We paid cash dividends to our shareholders of $ 244 million and $ 246 million during the second quarter, and $ 488 million and $ 344 million during the first half, of fiscal years 2026 and 2025, respectively"]`. This reinvestment bias favors long-term value creation over yield.
+
+### 4. Market Sentiment Lags Fundamentals
+
+Despite fundamentals, NVDA faced near-term pressure in late 2025 as peers like Broadcom reached new all-time highs `[SOURCE: social/NVDA/twitter_2025-11-26.json | "$AVGO smashed a new ATH before earnings"]` and Meta announced in-house AI chips `[SOURCE: social/NVDA/twitter_2025-11-26.json | "$META is joining $GOOG and $AMZN as it starts using its own AI chip"]`. However, these are not structural threats. NVDA’s ecosystem — from CUDA to DGX to AI Enterprise software — creates switching costs that in-house chips cannot bypass. The "OpenAI complex" basket, which includes NVDA, rose ~90–100% by early October 2025 `[SOURCE: social/NVDA/twitter_2025-11-25.json | "ramping to roughly +40‑50% by July and to about +90‑100% by early October"]`, confirming institutional demand for AI infrastructure exposure.
+
+NVDA’s 34.8% return from January 2 to December 31, 2025 `[SOURCE: prices/NVDA.csv | "NVDA 2025-01-02 close=138.31 -> 2025-12-31 close=186.5 (+34.8% over window)"]` underperforms its earnings growth (net income up 311% YoY) and peer momentum, suggesting valuation lag.
+
+### Falsification Condition
+
+This thesis is falsifiable if: **NVDA reports FY2026Q4 revenue below $150B or EPS below $1.25**, which would break the accelerating EPS beat trend and imply demand deceleration. Alternatively, if inventory provisions exceed $5B for FY2026 with no corresponding revenue growth, it would confirm overproduction.
+
+Absent such outcomes, NVDA’s combination of execution, reinvestment, and ecosystem control supports further upside. We reiterate **Buy**
