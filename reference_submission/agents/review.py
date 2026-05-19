@@ -575,8 +575,16 @@ class ReviewAgent:
             data = parse_json_obj(raw)
             drop: set[int] = set()
             for entry in (data.get("results") or []):
-                if (isinstance(entry, dict)
-                        and str(entry.get("action", "")).lower() == "drop"):
+                if not isinstance(entry, dict):
+                    continue
+                verdict = str(entry.get("verdict", "")).lower().strip()
+                action = str(entry.get("action", "")).lower().strip()
+                should_drop = verdict in {"match", "unsupported",
+                                          "ambiguous"}
+                # Backward-compatible fallback for older prompt replies.
+                if not verdict:
+                    should_drop = action == "drop"
+                if should_drop:
                     try:
                         drop.add(int(entry.get("idx")))
                     except (TypeError, ValueError):
