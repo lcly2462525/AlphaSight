@@ -401,24 +401,76 @@ class ReviewAgent:
             cand.append((self._ground_score(r), raw, r))
         cand.sort(key=lambda x: -x[0])
         cand = cand[:self._MAX_CANDIDATES]          # bound LLM calls only
+        # The extract LLM already parsed each claim into structured
+        # fields (sx). Index them so a candidate can carry its own
+        # structured reading into verify — the verifier then compares
+        # explicit ticker/period/metric/value instead of guessing which
+        # fact the sentence refers to.
+        sx_index = [(self._toks(Anchored.normalize(c["quote"])),
+                     self._fmt_sx(c["sx"]))
+                    for c in claims
+                    if c.get("sx") and self._fmt_sx(c["sx"])]
         _log(f"{len(claims)} claims, {len(exact)} det-exact, "
              f"{len(cand)} candidates; verifying each ...")
         for _, raw, hint in cand:
             if len(issues) >= self._MAX_ISSUES:
                 break
-            ok = self._verify_issue(raw, hint, primary, facts)
+            ok = self._verify_issue(raw, hint, primary, facts,
+                                    self._match_sx(raw, sx_index))
             if ok:
                 issues.append(ReviewIssue(quote=raw, reason=ok))
 
         _log(f"done ({time.time() - t0:.1f}s, {len(issues)} issues)")
         return issues[:self._MAX_ISSUES]
 
+    @staticmethod
+    def _fmt_sx(sx: dict | None) -> str:
+        """Compact one-line render of the first-stage structured parse
+        of a claim (only the non-null fields). Empty if nothing useful."""
+        if not isinstance(sx, dict):
+            return ""
+        parts: list[str] = []
+        for k in ("ticker", "fy", "fq", "metric", "value", "direction",
+                  "date", "form"):
+            v = sx.get(k)
+            if v not in (None, "", "null", "none", [], {}):
+                parts.append(f"{k}={v}")
+        pe = sx.get("peers")
+        if isinstance(pe, list) and pe:
+            parts.append(f"peers={','.join(map(str, pe[:12]))}")
+        return "; ".join(parts)
+
+    @staticmethod
+    def _toks(s: str) -> set[str]:
+        return set(re.findall(r"[A-Za-z0-9.]+|[一-鿿]", s or ""))
+
+    @staticmethod
+    def _match_sx(raw: str, sx_index: list[tuple[set, str]]) -> str:
+        """Attach the structured parse of the extracted claim that best
+        overlaps this candidate quote. Substring OR high token overlap
+        (claim spans and grounded-candidate spans align loosely, not by
+        containment). Best-effort — empty when nothing lines up."""
+        nt = ReviewAgent._toks(Anchored.normalize(raw))
+        if not nt:
+            return ""
+        best, bscore = "", 0.0
+        for ctoks, sxs in sx_index:
+            if not ctoks:
+                continue
+            inter = len(ctoks & nt)
+            cov = inter / len(ctoks)            # how much of the claim
+            if cov >= 0.6 and inter >= 4 and cov > bscore:
+                best, bscore = sxs, cov
+        return best
+
     def _verify_issue(self, quote: str, hint: str, primary: list[str],
-                      facts: str) -> str | None:
+                      facts: str, parse: str = "") -> str | None:
         """Stage-2 precision gate: focused, per-candidate fact-check.
         Pull evidence targeted at THIS quote and let the LLM confirm or
-        reject. Returns the confirmed reason, or None to drop. Any
-        failure or non-confirm => drop (precision-first)."""
+        reject. `parse` is the first-stage structured reading of the
+        claim (may be wrong — the verifier re-judges). Returns the
+        confirmed reason, or None to drop. Any failure or non-confirm
+        => drop (precision-first)."""
         try:
             res = self.retriever.search(
                 quote[:600], top_k=5, tickers=primary or None)
@@ -430,6 +482,7 @@ class ReviewAgent:
                 [{"role": "user",
                   "content": self._verify_p.format(
                       quote=quote[:1200], hint=(hint or "")[:600],
+                      parse=(parse or "(none)")[:500],
                       facts=facts[:6000], evidence=evidence)}],
                 config=self.llm,
                 **{**self.params,

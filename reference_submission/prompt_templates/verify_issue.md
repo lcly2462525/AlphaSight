@@ -34,6 +34,11 @@ REJECT if any of:
 # WHY PROPOSED
 {hint}
 
+# CLAIM PARSE (first-stage structured reading — ticker/period/metric/
+# value/direction the report seems to assert; MAY be wrong, re-judge it.
+# Use it to locate the exact VERIFIED FACT to compare against.)
+{parse}
+
 # VERIFIED FACTS
 {facts}
 
