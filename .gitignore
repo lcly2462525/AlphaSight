@@ -6,7 +6,7 @@ dataset.zip
 *.pptx
 
 # Prebuilt indexes — rebuilt from dataset, not tracked
-reference_submission/index/
+# reference_submission/index/
 
 # Python
 __pycache__/
@@ -23,9 +23,9 @@ build/
 
 # Provided resources — injected by the cloud/eval env, not our code
 # (problem set incl. ground truth, and baseline reference prompts)
-reference_submission/problem/
-reference_submission/prompt_templates/reference_generate.md
-reference_submission/prompt_templates/reference_review.md
+# reference_submission/problem/
+# reference_submission/prompt_templates/reference_generate.md
+# reference_submission/prompt_templates/reference_review.md
 
 # IDE
 .idea/
