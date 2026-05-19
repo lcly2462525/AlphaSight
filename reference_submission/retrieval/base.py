@@ -26,7 +26,11 @@ _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 # per-kind candidate caps keep per-request BM25 build bounded.
 # research is JSON (already structured into FactStore); a small cap
 # lets its raw dump back stop gaps without flooding BM25 with JSON noise.
-_CAND_CAP = {"filing": 60, "news": 400, "social": 200, "research": 40}
+# news_event = the news_merged atomic-event stream: each is a single
+# short, high-signal chunk (no body windows), so a larger cap is cheap
+# vs raw `news` and preserves recall for date-localized review claims.
+_CAND_CAP = {"filing": 60, "news": 400, "social": 200, "research": 40,
+             "news_event": 300}
 _CHUNK_BUDGET = 1200
 _TOTAL_BUDGET = 12000
 
@@ -92,6 +96,15 @@ class HybridRetriever:
                 continue
             docs.sort(key=lambda x: x.timestamp or "", reverse=True)
             for m in docs[:cap]:
+                if m.kind == "news_event":
+                    # event text is materialized in the catalog row (built
+                    # offline) — one chunk, zero file I/O. m.path is a real
+                    # source news file so [SOURCE: ...] stays citable.
+                    ev = (m.extra or {}).get("event_text", "")
+                    if ev:
+                        chunks.append(Chunk(m.path, ev, "news_event",
+                                            "event"))
+                    continue
                 txt = doc_text(str(self.corpus / m.path), m.kind)
                 chunks.extend(chunk_doc(m.path, txt, m.kind))
         return chunks
@@ -141,6 +154,24 @@ class HybridRetriever:
                         key=lambda kv: -kv[1])
         sparse = [c for c, s in ranked if s > 0][:top_k * 4]
 
+        # news_event is a curated, attributed, dated high-signal lane.
+        # One-sentence events score far below long filing/social chunks
+        # in the shared BM25 pool and get cut by the top_k*4 sparse
+        # truncation before fusion ever sees them — so kind_bias (a
+        # rank-based RRF re-weight) cannot lift them. Score events on
+        # their OWN BM25 so length never crowds them out, then guarantee
+        # the best ones a reserved, leading slice of the evidence (this
+        # is what places events ABOVE raw news, deterministically).
+        ev_pairs = [(c, t) for c, t in tok_chunks if c.kind == "news_event"]
+        event_lead: list[Chunk] = []
+        if ev_pairs:
+            ebm = BM25Okapi([t for _, t in ev_pairs])
+            esc = ebm.get_scores(q_tok)
+            eranked = sorted(zip((c for c, _ in ev_pairs), esc),
+                             key=lambda kv: -kv[1])
+            event_lead = [c for c, s in eranked
+                          if s > 0][:max(1, top_k // 2)]
+
         dense: list[Chunk] = []
         if self._dense is not None:
             allowed = {c.path for c in sparse} or None
@@ -149,6 +180,10 @@ class HybridRetriever:
         fused = weighted_rrf(sparse, dense, route.w_sparse, route.w_dense,
                              kind_bias=route.kind_bias,
                              item_filter=route.item_filter)
+        if event_lead:
+            seen = {(c.path, c.text[:64]) for c in event_lead}
+            fused = event_lead + [c for c in fused
+                                  if (c.path, c.text[:64]) not in seen]
 
         q_set = set(q_tok)
         evidence: list[tuple[str, str]] = []

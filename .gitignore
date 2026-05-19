@@ -32,3 +32,5 @@ build/
 .vscode/
 
 generatedataset/
+
+news_merged.zip

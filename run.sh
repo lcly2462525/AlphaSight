@@ -25,6 +25,9 @@ export ALPHASIGHT_CORPUS_DIR="${ALPHASIGHT_CORPUS_DIR:-$ROOT/dataset/corpus}"
 export ALPHASIGHT_PRICES_DIR="${ALPHASIGHT_PRICES_DIR:-$ROOT/dataset/prices}"
 export ALPHASIGHT_PRICES_MINUTE_DIR="${ALPHASIGHT_PRICES_MINUTE_DIR:-$ROOT/dataset/prices_minute}"
 export ALPHASIGHT_CATALOG_PATH="${ALPHASIGHT_CATALOG_PATH:-$ROOT/dataset/catalog.jsonl}"
+# Optional additive catalog supplement (news_merged event stream).
+# Auto-picked up if the file exists; absent => behaviour unchanged.
+export ALPHASIGHT_CATALOG_SUPPLEMENT="${ALPHASIGHT_CATALOG_SUPPLEMENT:-$ROOT/dataset/news_event_catalog.jsonl}"
 export ALPHASIGHT_LLM_BASE_URL="${ALPHASIGHT_LLM_BASE_URL:-http://localhost:8000/v1}"
 export ALPHASIGHT_LLM_MODEL="${ALPHASIGHT_LLM_MODEL:-inference-model}"
 
