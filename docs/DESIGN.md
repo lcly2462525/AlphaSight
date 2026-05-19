@@ -132,14 +132,36 @@ class RouteDecision:
 
 这是「尽量不丢信息」的关键。**不做全文截断**，按来源结构切：
 
-**filing（最重要）—— 章节感知切块：**
+**filing（最重要）—— 章节感知切块（按真实数据设计/验证）：**
+
+读真实数据发现三个坑，逐一对策：
+1. **HTML 实体没解码**：原文是 `Item 1A&#8212;Risk Factors`、`&#160;`、
+   `&#8217;`。先 `html.unescape()`（修了影响分词/引用/分隔符的全局 bug）。
+2. **TOC + 交叉引用污染**：目录 `Item 1A. Risk Factors 9 Item 1B…` 与
+   正文里 `见 Item 8 of this Report` 都会撞 Item 正则。
+3. **不同申报器格式不同**：Workiva 用 em-dash `Item 1A—Risk Factors`；
+   Apple 自家申报器用句点 `Item 1A. Risk Factors`。
+
 ```
-HTML → 去标签 → 按 SEC Item 边界切段
-   ├─ 识别 "Item 1A. Risk Factors" / "Item 7. MD&A" / "Item 8" 标题锚点
-   ├─ 每个 Item 内再按 ~1000 char 滑窗（overlap 150）切 chunk
-   └─ chunk meta 带 {item, form, ticker, date}  ← 检索时可按 Item 过滤
+HTML → strip tags + html.unescape → 识别真实章节头：
+  锚点 = Item N <[.\-—:]{0,4}> <规范标题>     ← 标题须紧跟编号
+    · 标题须是规范名（Risk Factors / MD&A / Financial Statements /
+      Business / Quantitative…）→ 交叉引用("Item 1A of this Form…")
+      因编号与标题间插了别的词，天然不匹配
+    · 标题后跟「页码+Item」者 = 目录行，丢弃
+    · 同一 section 多个候选 → 取「到下一候选跨度最大」者 = 正文
+      （TOC/xref 成簇靠得近，正文体跨数千字）
+  每节内 ~1100 char 滑窗（overlap 150），chunk.section = 规范 item key
+  无锚点（部分 8-K/非标准）→ 整篇兜底
 ```
-好处：风险归因题直接定位 Item 1A，不被无关章节稀释；长文档不丢中后段。
+只匹配高价值节（1/1A/7/7A/8、10-Q 的 Item 2 MD&A、8-K 的 2.02/8.01/
+7.01），返回的节全量切；section key 供 router `item_filter` 精确过滤。
+
+实测验证：COST 10-K(Workiva)、AAPL 10-K(句点)、COST/NVDA 10-Q、
+COST 8-K 均正确切出 Item 1/1A/7/7A/8 或 MD&A，无 TOC/xref 噪声、
+节体长度合理（`_MAX_SECTION` 封顶 9 万字防附录炸开）。
+好处：风险归因题直接定位 Item 1A，不被无关章节/目录/引用稀释；
+长文档不丢中后段。
 
 **news —— 标题优先切块：**
 ```
