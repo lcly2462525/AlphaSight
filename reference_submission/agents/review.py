@@ -1,17 +1,21 @@
-"""ReviewAgent: extract -> per-claim verify -> LLM adjudicate.
+"""ReviewAgent: extract -> tiered verify -> emit.
 
-Two candidate sources feed ONE adjudication pass:
+Claims are extracted whitespace-tolerantly (see anchor.py) so wrapped
+sentences/bullets/table rows survive. Each claim is routed to a
+type-specific verifier and the result is split into two tiers:
 
-  * numeric  — period-aligned per-claim match against the FactStore
-               (parse ticker+fiscal period+metric, look up that exact
-               row, attach the authoritative value as evidence)
-  * narrative — retrieval-grounded evidence for the remaining claims
+  * exact  — structured comparison against an authoritative source with
+             no parse ambiguity (filing-date catalog, peers.json, prices
+             CSV, EPS table cells vs earnings.json, report-internal
+             return arithmetic). These are EMITTED DIRECTLY — the old
+             LLM re-adjudication flipped confirmed-correct facts into
+             false issues.
+  * weak   — fragile parses (free-text QoQ pairs, generic revenue
+             numeric) that still go through a contradiction-only LLM
+             pass together with the narrative/source/causal claims.
 
-Every candidate — including the deterministic numeric ones — is judged
-by the LLM before becoming an issue. The deterministic step never emits
-directly: it only produces high-precision, fact-backed candidates so the
-LLM can drop mis-parses (false positives are penalised). Every emitted
-quote is forced to be a verbatim substring of the report.
+Every emitted quote is re-anchored to the original raw span so it
+stays a verbatim substring of the report.
 """
 
 from __future__ import annotations
@@ -20,8 +24,10 @@ import re
 
 from llm import chat
 from schemas import ReviewIssue
-from retrieval.numeric import approx_equal, parse_numbers
+from retrieval.numeric import approx_equal, contradicts, parse_numbers
 from agents._util import load_prompt, parse_json_obj
+from agents.anchor import Anchored
+from agents.tables import col, parse_tables
 
 _METRIC = [
     ("eps", re.compile(r"\beps\b|earnings per share", re.I)),
@@ -152,7 +158,10 @@ def _parse_dates(text: str) -> list[str]:
 
 # ---- per-field EPS verification ------------------------------------
 
-_NUMTOK = r"\$?\s*(-?\d[\d,]*\.?\d*)"
+# An EPS figure: optional $, 1-3 integer digits, a MANDATORY decimal
+# (excludes bare quarter digits "Q2", 4-digit years "2025"), and not a
+# percentage. EPS magnitudes are small; this also rejects prices/volumes.
+_NUMTOK = r"\$?\s*(-?\d{1,3}\.\d{1,4})(?!\s*%)(?!\d)"
 _RX_ACTUAL = re.compile(
     r"(?:actual|reported|posted|delivered|came in at|print of|eps of)"
     r"\D{0,18}?" + _NUMTOK, re.I)
@@ -164,8 +173,20 @@ _RX_EST = re.compile(
     r"\D{0,18}?" + _NUMTOK, re.I)
 _RX_EST_BEFORE = re.compile(
     r"(?<![A-Za-z])" + _NUMTOK
-    + r"\D{0,12}?(?:consensus|estimate[sd]?|expected|预期|一致预期)",
-    re.I)
+    + r"\D{0,12}?(?:consensus|estimate[sd]?|expected)", re.I)
+# Chinese consensus must use the consensus NOUN ("一致预期" / "市场预期"),
+# never bare "预期" — "超预期"/"不及预期" are beat/miss verbs, and a
+# loose "<num> ... 预期" grabbed unrelated %/actual values (a major
+# false-positive source on the Chinese reports).
+_CN_EST = r"(?:市场)?一致预期|市场预期|彭博一致预期|分析师预期"
+_RX_EST_CN = re.compile(
+    r"(?:" + _CN_EST + r")\D{0,8}?" + _NUMTOK)
+_RX_EST_CN_BEFORE = re.compile(
+    _NUMTOK + r"\s*美元?\s*的?\s*(?:" + _CN_EST + r")")
+# Chinese "actual" must be tied to the EPS noun (bare "实际" appears in
+# price/volume/revenue prose and grabbed unrelated numbers).
+_RX_ACTUAL_CN = re.compile(
+    r"实际\s*(?:EPS|每股收益|每股盈利)\s*(?:为|约|是)?\s*" + _NUMTOK)
 _RX_MISS = re.compile(r"\b(miss|missed|shortfall|fell short|below)\b", re.I)
 _RX_BEAT = re.compile(r"\b(beat|beats|topped|surpass|above)\b", re.I)
 
@@ -179,25 +200,38 @@ def _f(s: str) -> float | None:
 
 def _eps_problems(quote: str, row: dict) -> list[str]:
     """Per-field check: actual / estimate / surprise sign vs the
-    authoritative earnings row. Returns human-readable problems."""
+    authoritative earnings row. Returns human-readable problems.
+
+    Gate: only an actual earnings-result claim (an explicit EPS figure
+    or a stated consensus/estimate) is checkable. Prose that merely
+    contains the word "miss"/"beat" is not — that was a false-positive
+    source (e.g. '...the December-quarter EPS miss was...')."""
+    am = (_RX_ACTUAL_BEFORE.search(quote) or _RX_ACTUAL.search(quote)
+          or _RX_ACTUAL_CN.search(quote))
+    em = (_RX_EST.search(quote) or _RX_EST_BEFORE.search(quote)
+          or _RX_EST_CN.search(quote) or _RX_EST_CN_BEFORE.search(quote))
+    if not (am or em):
+        return []
     probs: list[str] = []
     act = row.get("actual")
     est = row.get("estimate")
     sp = row.get("surprisePercent")
     surp = row.get("surprise")
 
-    m = _RX_ACTUAL_BEFORE.search(quote) or _RX_ACTUAL.search(quote)
-    if m and isinstance(act, (int, float)):
-        v = _f(m.group(1))
-        if v is not None and abs(v) <= 1000 and not approx_equal(v, act):
-            probs.append(f"claimed actual EPS {v:g} but verified "
-                         f"actual is {act:g}")
-    m = _RX_EST.search(quote) or _RX_EST_BEFORE.search(quote)
-    if m and isinstance(est, (int, float)):
-        v = _f(m.group(1))
-        if v is not None and abs(v) <= 1000 and not approx_equal(v, est):
-            probs.append(f"claimed consensus/estimate {v:g} but verified "
-                         f"estimate is {est:g}")
+    av = _f(am.group(1)) if am else None
+    ev = _f(em.group(1)) if em else None
+    if (av is not None and isinstance(act, (int, float))
+            and abs(av) <= 1000 and not approx_equal(av, act)):
+        probs.append(f"claimed actual EPS {av:g} but verified "
+                     f"actual is {act:g}")
+    # If the "estimate" we parsed equals the parsed actual, we almost
+    # certainly grabbed the actual figure, not a stated consensus —
+    # don't raise a bogus estimate mismatch.
+    if (ev is not None and isinstance(est, (int, float))
+            and abs(ev) <= 1000 and not approx_equal(ev, est)
+            and not (av is not None and approx_equal(ev, av))):
+        probs.append(f"claimed consensus/estimate {ev:g} but verified "
+                     f"estimate is {est:g}")
     # beat/miss direction vs real surprise sign
     if isinstance(surp, (int, float)) and surp != 0:
         claims_miss = bool(_RX_MISS.search(quote))
@@ -222,6 +256,7 @@ class ReviewAgent:
         self.params = rev_params
         self._extract_p = load_prompt("extract_claims.md")
         self._adj_p = load_prompt("adjudicate.md")
+        self._veto_p = load_prompt("verify_exact.md")
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -282,6 +317,9 @@ class ReviewAgent:
             return primary
         return []
 
+    _MAX_ISSUES = 8          # GT is 0-3/report; over-emission tanks P
+    _MAX_NARRATIVE = 4       # narrative path is the false-positive source
+
     def run(self, report: str) -> list[ReviewIssue]:
         import sys
         import time
@@ -290,46 +328,82 @@ class ReviewAgent:
             print(f"[rev] {m}", file=sys.stderr, flush=True)
 
         t0 = time.time()
+        anc = Anchored(report)
         _log("extracting claims (regex + LLM) ...")
-        claims = self._extract(report)
+        claims = self._extract(anc)
         primary = self._primary_ticker(report)
 
-        candidates: list[dict] = []
+        det: list[dict] = []
         used: set[str] = set()
         for c in (self._numeric_candidates(claims, primary)
                   + self._date_candidates(claims, primary)
                   + self._period_end_candidates(claims, primary)
                   + self._price_candidates(claims, primary)
                   + self._peer_candidates(claims, primary)
-                  + self._arithmetic_candidates(claims)):
+                  + self._arithmetic_candidates(claims)
+                  + self._table_candidates(anc, primary)):
             if c["quote"] in used:
                 continue
-            candidates.append(c)
+            det.append(c)
             used.add(c["quote"])
-        _log(f"{len(claims)} claims, {len(candidates)} deterministic "
-             f"candidates; retrieving for the rest ...")
-        for c in self._retrieval_candidates(claims, used, primary):
-            candidates.append(c)
 
-        _log(f"adjudicating {len(candidates)} candidates (LLM) ...")
+        exact = self._veto_exact(
+            [c for c in det if c.get("tier") == "exact"])
+        weak = [c for c in det if c.get("tier") != "exact"]
+
         issues: list[ReviewIssue] = []
-        seen: set[str] = set()
-        for q, r in self._adjudicate(candidates):
-            if q in report and q not in seen:
-                issues.append(ReviewIssue(quote=q, reason=r))
-                seen.add(q)
+        seen_raw: set[str] = set()
+        # exact-tier: structured, unambiguous — emit directly. The old
+        # LLM re-adjudication used to flip confirmed-correct facts into
+        # false issues.
+        for c in exact:
+            raw = anc.find_raw(c["quote"])
+            if not raw or raw in seen_raw:
+                continue
+            issues.append(ReviewIssue(
+                quote=raw, reason=c.get("reason") or self._reason_from(c)))
+            seen_raw.add(raw)
+
+        # weak-tier (fragile parses) + narrative/source/causal claims
+        # (no deterministic ground truth): retrieve and let the LLM
+        # judge — contradiction only, must cite the refuting span.
+        narr = self._retrieval_candidates(claims, used, primary)
+        batch = weak + narr
+        _log(f"{len(claims)} claims, {len(exact)} exact, "
+             f"{len(weak)} weak, {len(narr)} narrative; adjudicating ...")
+        n_added = 0
+        for q, r in self._adjudicate(batch):
+            if n_added >= self._MAX_NARRATIVE:
+                break
+            raw = anc.find_raw(q)
+            if raw and raw not in seen_raw:
+                issues.append(ReviewIssue(quote=raw, reason=r))
+                seen_raw.add(raw)
+                n_added += 1
+
         _log(f"done ({time.time() - t0:.1f}s, {len(issues)} issues)")
-        return issues
+        return issues[:self._MAX_ISSUES]
+
+    @staticmethod
+    def _reason_from(c: dict) -> str:
+        """Turn a verifier's evidence line into an emittable reason that
+        cites the corpus source (matches the answer-key reason style)."""
+        ev = (c.get("evidence") or "").strip()
+        ev = re.sub(r"^DETERMINISTIC FACT\s*", "", ev)
+        ev = re.sub(r"\[SOURCE:\s*([^\]]+)\]", r"Per corpus/\1,", ev, count=1)
+        ev = re.sub(r"^arithmetic:\s*", "Arithmetic check: ", ev)
+        return ev or "Contradicted by the structured corpus."
 
     # ---- step 1: extract -------------------------------------------
 
-    def _extract(self, report: str) -> list[dict]:
+    def _extract(self, anc: Anchored) -> list[dict]:
+        report = anc.raw
         out: list[dict] = []
         seen: set[str] = set()
 
         def add(q: str, kind: str = "other") -> None:
-            q = q.strip()
-            if not self._good_quote(q, report):
+            q = Anchored.normalize(q)
+            if not self._good_quote(q, anc):
                 return
             # Keep the more complete quote when one contains another.
             for old in list(seen):
@@ -362,8 +436,8 @@ class ReviewAgent:
         out.sort(key=lambda x: self._claim_priority(x["quote"]), reverse=True)
         return out[:40]
 
-    def _good_quote(self, q: str, report: str) -> bool:
-        if not q or q not in report:
+    def _good_quote(self, q: str, anc: Anchored) -> bool:
+        if not q or not anc.contains(q):
             return False
         if len(q) < 18 or _WEAK_FRAGMENT.match(q):
             return False
@@ -474,7 +548,17 @@ class ReviewAgent:
                         break
                     src = f"research/{tk}/earnings.json"
                     period = (f"FY{row.get('year')} Q{row.get('quarter')}")
+                    # Exact only when the period is fully pinned AND the
+                    # matched row is that exact period. A claim with no
+                    # year matches the first same-quarter row of ANY
+                    # fiscal year, so the comparison is unreliable —
+                    # demote to weak (LLM adjudicates) instead of
+                    # direct-emitting a likely false positive.
+                    pinned = (year is not None and quarter is not None
+                              and row.get("year") == year
+                              and row.get("quarter") == quarter)
                     out.append({"quote": q, "kind": "numeric",
+                                "tier": "exact" if pinned else "weak",
                                 "evidence": (
                                     f"DETERMINISTIC FACT [SOURCE: {src}] "
                                     f"{tk} {period} earnings — "
@@ -505,7 +589,7 @@ class ReviewAgent:
                         f"DETERMINISTIC FACT [SOURCE: {rows[0]['source']}] "
                         f"{tk} {metric}{(' for ' + period) if period else ''}"
                         f": {fact}. The claim's figure does not match."),
-                    "kind": "numeric"})
+                    "kind": "numeric", "tier": "weak"})
                 break
         return out
 
@@ -536,7 +620,7 @@ class ReviewAgent:
                 if not real or any(d in real for d in dates):
                     break
                 out.append({
-                    "quote": q, "kind": "date",
+                    "quote": q, "kind": "date", "tier": "exact",
                     "evidence": (
                         f"DETERMINISTIC FACT [SOURCE: catalog] {tk} "
                         f"{form} filings were filed on {', '.join(real)} "
@@ -568,7 +652,7 @@ class ReviewAgent:
                     continue
                 out.append({
                     "quote": q,
-                    "kind": "date_timeline",
+                    "kind": "date_timeline", "tier": "exact",
                     "evidence": (
                         f"DETERMINISTIC FACT [SOURCE: research/{tk}/"
                         f"financials_reported.json] {tk} FY{year} Q{quarter} "
@@ -615,7 +699,7 @@ class ReviewAgent:
                 if mismatch:
                     out.append({
                         "quote": q,
-                        "kind": "derived_calculation",
+                        "kind": "derived_calculation", "tier": "exact",
                         "evidence": (
                             "DETERMINISTIC FACT [SOURCE: prices/"
                             f"{tk}.csv] " + "; ".join(facts)
@@ -624,32 +708,63 @@ class ReviewAgent:
                     break
         return out
 
+    _NOT_TICKER = {"EPS", "FY", "QOQ", "YOY", "SEC", "NYSE", "NASDAQ",
+                   "CIK", "GAAP", "USD", "CEO", "CFO", "AND", "THE", "US"}
+
     def _peer_candidates(self, claims: list[dict],
                          primary: list[str]) -> list[dict]:
+        """The peer SUBJECT is the possessive company ("PFE's peer
+        basket ...") or the report's primary — NOT the tickers listed
+        inside the claim. Querying peers() with a listed peer (the old
+        bug) made every peer-membership error invisible."""
         out: list[dict] = []
+        universe = set(self.retriever.subject_universe())
         for c in claims:
             q = c["quote"]
-            if not re.search(r"peer(?:s)?(?:\.json| list| basket)|peer basket|"
-                             r"peer list|可比公司列表|同业列表", q, re.I):
+            if not re.search(r"\bpeer", q, re.I) and not re.search(
+                    r"同业|可比公司", q):
                 continue
-            for tk in self._scope(q, primary):
-                peers = self.retriever.fact_store.peers(tk)
-                if not peers:
-                    continue
-                claimed = [x for x in re.findall(r"\b[A-Z][A-Z.]{1,5}\b", q)
-                           if x not in {"EPS", "FY", "QOQ", "YOY", "SEC"}]
-                # The subject itself may appear in prose; compare only
-                # explicit list members after the possessive subject.
-                extras = sorted({x for x in claimed if x != tk and x not in peers})
-                if extras:
-                    out.append({
-                        "quote": q,
-                        "kind": "peer_membership",
-                        "evidence": (
-                            f"DETERMINISTIC FACT [SOURCE: research/{tk}/"
-                            f"peers.json] {tk} peer list is {peers}. "
-                            f"Extra claimed tickers not in peers: {extras}.")})
-                    break
+            subj = None
+            m = re.search(r"\b([A-Z]{1,6})(?:'s|’s)\s+peer", q)
+            if m and m.group(1) in universe:
+                subj = m.group(1)
+            if subj is None and len(primary) == 1 \
+                    and primary[0] in universe:
+                subj = primary[0]
+            if subj is None:
+                continue
+            peers = self.retriever.fact_store.peers(subj)
+            if not peers:
+                continue
+            peer_set = set(peers) - {subj}
+            # Only the explicitly ENUMERATED list members are checkable.
+            # Parse the region after "basket is / peers are / : / 为"
+            # up to the first sentence/clause break — comparing the
+            # whole sentence flagged correct lists (tickers from
+            # surrounding prose) and tanked precision.
+            em = re.search(
+                r"(?:peers?(?:\s+(?:basket|list|group|set))?\s*"
+                r"(?:is|are|:|=|包括|为)|peers\.json[^A-Za-z]{0,24})"
+                r"(.+)", q, re.I | re.S)
+            region = em.group(1) if em else ""
+            region = re.split(r"[—–]|\s-\s|(?<=[A-Za-z])\.\s|;|\n|\(|（"
+                              r"|\bwhich\b|\bincluding\b|\bversus\b",
+                              region)[0]
+            toks = [t for t in re.findall(r"\b[A-Z][A-Z.]{0,5}\b", region)
+                    if t not in self._NOT_TICKER and t != subj]
+            if len(toks) < 4:           # not a real enumerated list
+                continue
+            extras = sorted(set(toks) - peer_set)
+            if not extras:
+                continue
+            out.append({
+                "quote": q,
+                "kind": "peer_membership", "tier": "exact",
+                "evidence": (
+                    f"DETERMINISTIC FACT [SOURCE: research/{subj}/"
+                    f"peers.json] {subj}'s authoritative peer list is "
+                    f"{sorted(peer_set)}. Claimed peers not in it: "
+                    f"{', '.join(extras)}.")})
         return out
 
     def _arithmetic_candidates(self, claims: list[dict]) -> list[dict]:
@@ -675,11 +790,182 @@ class ReviewAgent:
             if mismatch or polarity_bad:
                 out.append({
                     "quote": q,
-                    "kind": "derived_calculation",
+                    "kind": "derived_calculation", "tier": "weak",
                     "evidence": (
                         f"DETERMINISTIC FACT arithmetic: using {a:g} vs {b:g}, "
                         f"the derived change is {calc:+.1f}%, not {claimed:g}%. "
                         "The claim's stated magnitude or direction does not match.")})
+
+        # Calendar-year / close-to-close return stated alongside the very
+        # closes it is derived from — recompute from the report's own
+        # numbers (source-free, near-zero false positives).
+        _PX = r"\$?\s*\**\s*\$?\s*([\d,]+\.\d{2})"
+        for c in claims:
+            q = c["quote"]
+            if q in {x["quote"] for x in out}:
+                continue
+            if not re.search(r"calendar-year|close-to-close|price\s+"
+                             r"(?:gain|decline|return)|annual\s+return|"
+                             r"年初至今|全年.{0,4}(?:涨幅|跌幅|回报|收益)",
+                             q, re.I):
+                continue
+            sm = (re.search(r"close-to-close against" + _PX, q, re.I)
+                  or re.search(r"opened[^$%]{0,40}?\$\s*([\d,]+\.\d{2})",
+                               q, re.I)
+                  or re.search(_PX + r"\s*(?:on\s+)?"
+                               r"(?:January\s*2|Jan\.?\s*2|2025-01-02)",
+                               q, re.I))
+            em = (re.search(r"closed[^$%]{0,45}?\$\s*\**\s*([\d,]+\.\d{2})",
+                            q, re.I)
+                  or re.search(_PX + r"\s*(?:on\s+)?"
+                               r"(?:December\s*31|Dec\.?\s*31|2025-12-31)",
+                               q, re.I))
+            pm = re.search(r"(-?\d+(?:\.\d+)?)\s*%", q)
+            if not (sm and em and pm):
+                continue
+            start = float(sm.group(1).replace(",", ""))
+            end = float(em.group(1).replace(",", ""))
+            if start == 0:
+                continue
+            claimed = float(pm.group(1))
+            calc = (end / start - 1) * 100
+            if abs(claimed - calc) <= max(2.0, abs(calc) * 0.10):
+                continue
+            out.append({
+                "quote": q,
+                "kind": "derived_calculation", "tier": "exact",
+                "evidence": (
+                    f"DETERMINISTIC FACT arithmetic: close-to-close "
+                    f"{start:g} -> {end:g} is {calc:+.1f}%, not the stated "
+                    f"{claimed:g}%. The report's own prices contradict its "
+                    f"computed return.")})
+        return out
+
+    # ---- step 2c: table-cell verifiers (EPS / nine-month) ----------
+
+    @staticmethod
+    def _first_num(s: str | None) -> float | None:
+        ns = parse_numbers(s or "")
+        return ns[0].value if ns else None
+
+    def _eps_table_row(self, tk: str, y: int | None, q: int,
+                       by: dict, qn: str) -> dict | None:
+        row = self.retriever.fact_store.earnings_row(tk, y, q)
+        if not row:
+            return None
+        av = self._first_num(col(by, "actual", "reported"))
+        ev = self._first_num(col(by, "estimate", "consensus", "expected"))
+        sp_cell = col(by, "surprise")
+        ra, re_, rsp = (row.get("actual"), row.get("estimate"),
+                        row.get("surprisePercent"))
+        probs: list[str] = []
+        if (av is not None and isinstance(ra, (int, float))
+                and abs(av) <= 1000 and not approx_equal(av, ra)):
+            probs.append(f"actual EPS stated {av:g}, verified {ra:g}")
+        if (ev is not None and isinstance(re_, (int, float))
+                and abs(ev) <= 1000 and not approx_equal(ev, re_)):
+            probs.append(f"consensus/estimate stated {ev:g}, verified {re_:g}")
+        if sp_cell and isinstance(rsp, (int, float)):
+            spv = [n.value for n in parse_numbers(sp_cell) if n.is_pct]
+            if spv and not approx_equal(spv[0], rsp, rel=0.15, abs_=0.6):
+                probs.append(f"surprise stated {spv[0]:g}%, verified {rsp:g}%")
+        if not probs:
+            return None
+        return {
+            "quote": qn, "kind": "numeric", "tier": "exact",
+            "evidence": (
+                f"DETERMINISTIC FACT [SOURCE: research/{tk}/earnings.json] "
+                f"{tk} FY{row.get('year')} Q{row.get('quarter')} earnings — "
+                + "; ".join(probs) + ".")}
+
+    def _ninemonth_table_row(self, tk: str, by: dict, tbl, qn: str,
+                             is_ni: bool) -> dict | None:
+        yrs = [int(x) for x in re.findall(
+            r"20\d{2}", " ".join(tbl.headers) + " " + tbl.caption)]
+        target = max(yrs) if yrs else 2025
+        key = "net_income" if is_ni else "revenue"
+        label = "nine-month net income" if is_ni else "nine-month revenue"
+        cell = None
+        for h, v in by.items():
+            if str(target) in h and (is_ni and ("ni" in h or "net" in h)
+                                     or (not is_ni and ("rev" in h
+                                                        or "sales" in h))):
+                cell = v
+                break
+        claimed = self._first_num(cell)
+        if claimed is None or abs(claimed) < 1e6:
+            return None
+        rows = self.retriever.fact_store.period_rows(
+            tk, year=target, quarter=3)
+        if not rows:
+            return None
+        r = rows[0]
+        if not r.get("cumulative"):
+            return None
+        truth = r.get(f"{key}_cum")
+        if not isinstance(truth, (int, float)) or truth == 0:
+            return None
+        # FactStore concept selection is fuzzy for financial-sector
+        # filers (it can latch onto a tiny line item). If the
+        # authoritative figure is orders of magnitude off the claimed
+        # one, it is a concept mis-pick, not a report error — skip
+        # rather than emit a garbage deterministic issue.
+        ratio = abs(claimed) / abs(truth)
+        if ratio < 0.25 or ratio > 4.0:
+            return None
+        # high precision: only flag a clear, large mismatch
+        if (not contradicts(claimed, truth, rel=0.12)
+                or abs(claimed - truth) <= abs(truth) * 0.12):
+            return None
+        return {
+            "quote": qn, "kind": "numeric", "tier": "exact",
+            "evidence": (
+                f"DETERMINISTIC FACT [SOURCE: research/{tk}/"
+                f"financials_reported.json] {tk} FY{target} {label} "
+                f"(through Q3) is {truth:,.0f}; the table states "
+                f"{claimed:,.0f}, which does not match.")}
+
+    def _table_candidates(self, anc: Anchored,
+                          primary: list[str]) -> list[dict]:
+        out: list[dict] = []
+        universe = set(self.retriever.subject_universe())
+        subj0 = (primary[0] if len(primary) == 1
+                 and primary[0] in universe else None)
+        for tbl in parse_tables(anc.raw):
+            ctx = (" ".join(tbl.headers) + " " + tbl.caption).lower()
+            hdr = " ".join(tbl.headers)
+            is_eps = ("eps" in ctx or "earnings per share" in ctx
+                      or (("actual" in hdr or "estimate" in hdr
+                           or "consensus" in hdr) and "surprise" in hdr))
+            nine = bool(re.search(
+                r"9m\b|nine[- ]?months?|9-?month|九个月|前三季度|前三个季度",
+                ctx))
+            is_ni = ("net income" in ctx or "net inc" in ctx
+                     or re.search(r"\bni\b", ctx) or "净利" in ctx)
+            is_rev = ("revenue" in ctx or "sales" in ctx or "营收" in ctx)
+            for row in tbl.rows:
+                by = row["by"]
+                qn = anc.normalize(row["raw"])
+                if len(qn) < 8:
+                    continue
+                tk = None
+                for v in by.values():
+                    vv = (v or "").strip().upper()
+                    if vv in universe:
+                        tk = vv
+                        break
+                tk = tk or subj0
+                if not tk:
+                    continue
+                rowtext = " ".join(str(v) for v in by.values())
+                y, qq = _parse_period(rowtext + " " + tbl.caption)
+                cand = None
+                if is_eps and qq and y is not None:
+                    cand = self._eps_table_row(tk, y, qq, by, qn)
+                if cand is None and nine and (is_ni or is_rev):
+                    cand = self._ninemonth_table_row(tk, by, tbl, qn, is_ni)
+                if cand:
+                    out.append(cand)
         return out
 
     # ---- step 2b: retrieval candidates for the rest ----------------
@@ -698,6 +984,43 @@ class ReviewAgent:
                         "evidence": res.evidence_block()[:2500],
                         "kind": c.get("claim_type") or "narrative"})
         return out
+
+    # ---- exact-tier LLM veto gate (drop-only) ----------------------
+
+    def _veto_exact(self, candidates: list[dict]) -> list[dict]:
+        """One-directional precision gate: the LLM may only DROP a
+        candidate whose claim was mis-parsed (a price/volume/year taken
+        as EPS, a forecast taken as a reported figure, a period
+        mismatch). It cannot re-derive, re-judge, or add. Any failure
+        keeps everything — the deterministic verdict stays authoritative
+        and the offline (no-LLM) path is unaffected."""
+        if not candidates:
+            return []
+        items = "\n\n".join(
+            f'[{i}] CLAIM: "{c["quote"][:600]}"\n'
+            f'DETERMINISTIC FINDING: '
+            f'{(c.get("reason") or self._reason_from(c))[:400]}'
+            for i, c in enumerate(candidates))
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._veto_p.format(items=items)}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+        except Exception:
+            return candidates
+        drop = data.get("drop", []) if isinstance(data, dict) else []
+        if not isinstance(drop, list):
+            return candidates
+        drop_idx = {int(x) for x in drop
+                    if isinstance(x, (int, str)) and str(x).strip().isdigit()}
+        kept = [c for i, c in enumerate(candidates) if i not in drop_idx]
+        # Guard against a degenerate "drop everything" reply: if the LLM
+        # asks to drop all, distrust it and keep all (precision win must
+        # not be wiped by one bad generation).
+        return kept if kept else candidates
 
     # ---- step 3: single LLM adjudication over ALL candidates -------
 
