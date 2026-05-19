@@ -1,5 +1,7 @@
-You are fact-checking ONE section of an equity-research report against
-an authoritative ground truth. Works for English and Chinese.
+You are generating CANDIDATE issues for ONE section of an equity-
+research report. Works for English and Chinese. A separate strict
+verifier will confirm or drop each candidate afterwards, so here you
+should favor RECALL — surface anything that plausibly conflicts.
 
 You are given:
 - VERIFIED FACTS: exact values pulled directly from the structured
@@ -8,28 +10,22 @@ You are given:
 - SOURCE PASSAGES: retrieved filing/news text relevant to this section.
 - REPORT SECTION: the text to check.
 
-Your job: list statements in the REPORT SECTION that **contradict** a
-VERIFIED FACT or a SOURCE PASSAGE. You do NOT compute or guess truth —
-you only compare the section's wording against what is given.
+Your job: list every statement in the REPORT SECTION that **may
+contradict** a VERIFIED FACT, a SOURCE PASSAGE, or another statement in
+the same section. Compare wording; do not compute new truths.
 
-Hard rules:
-- Flag a statement ONLY if a specific VERIFIED FACT or a specific
-  sentence in SOURCE PASSAGES plainly says something incompatible
-  (a different number/date, a reversed beat/miss or up/down or
-  upgrade/downgrade, a wrong attributed source/outlet, a peer not in
-  the list, a wrong filing/event date).
-- VERIFIED FACTS outrank the report. If the report's number/date/
-  direction disagrees with a VERIFIED FACT, the report is wrong.
-- If nothing given clearly contradicts a statement, do NOT flag it.
-  Absence of support is not contradiction. When unsure, skip.
-- Opinions, forecasts, valuations, and soft narrative are never issues.
-- You must be able to point to the exact fact/passage that conflicts.
-- A report normally contains only a FEW deliberately injected errors.
-  Report at most the 1-2 MOST clear-cut contradictions in this section,
-  not every imperfection. Ignore rounding (≤1% / a few cents), fiscal-
-  year vs calendar-year labeling, single-quarter vs cumulative wording,
-  and restatements. If a section has nothing blatantly wrong, return
-  none — most sections will.
+Guidance:
+- Include a candidate when a number / date / EPS beat-or-miss /
+  up-or-down / upgrade-or-downgrade / attributed source / peer
+  membership / filing or event date / quoted figure looks different
+  from a VERIFIED FACT or passage, OR when two statements in the
+  section contradict each other.
+- VERIFIED FACTS outrank the report.
+- Err toward INCLUDING a plausible candidate — the next step verifies
+  it. But still skip pure opinions, forecasts, valuations, and soft
+  narrative ("we believe", "story stock"); those are never issues.
+- Prefer quoting the full sentence / bullet / table row that carries
+  the suspect figure.
 
 # VERIFIED FACTS
 {facts}
@@ -42,7 +38,7 @@ Hard rules:
 
 # OUTPUT
 Return JSON only:
-{{"issues": [{{"quote": "<verbatim substring of the REPORT SECTION, copied EXACTLY incl. markdown/newlines>", "reason": "<what is wrong + the correct value, citing the specific VERIFIED FACT or passage that contradicts it>"}}]}}
+{{"issues": [{{"quote": "<verbatim substring of the REPORT SECTION, copied EXACTLY incl. markdown/newlines>", "reason": "<what looks wrong + the fact/passage/other statement it seems to conflict with>"}}]}}
 - `quote` MUST be an exact substring of the REPORT SECTION (a full
   sentence, bullet, or table row — not a bare number/date fragment).
-- Return {{"issues": []}} if nothing in this section is contradicted.
+- Return {{"issues": []}} only if nothing in this section looks off.

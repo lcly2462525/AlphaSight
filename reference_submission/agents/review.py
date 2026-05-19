@@ -258,6 +258,7 @@ class ReviewAgent:
         self._adj_p = load_prompt("adjudicate.md")
         self._veto_p = load_prompt("verify_exact.md")
         self._grounded_p = load_prompt("grounded_review.md")
+        self._verify_p = load_prompt("verify_issue.md")
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -318,8 +319,12 @@ class ReviewAgent:
             return primary
         return []
 
-    _MAX_ISSUES = 4          # GT is 0-3/report; over-emission tanks P
-    _MAX_NARRATIVE = 4       # narrative path is the false-positive source
+    # Verification (stage 2) is the precision gate now, not a cap.
+    # _MAX_ISSUES is a generous safety net; _MAX_CANDIDATES only bounds
+    # how many per-candidate LLM verify calls we make (cost, not P).
+    _MAX_ISSUES = 6
+    _MAX_CANDIDATES = 16
+    _MAX_NARRATIVE = 4       # (legacy, unused by the propose-verify path)
 
     def run(self, report: str) -> list[ReviewIssue]:
         import sys
@@ -376,11 +381,12 @@ class ReviewAgent:
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
              f"grounded check over {len(sections)} sections "
              f"(shared evidence pool) ...")
-        # Collect ALL grounded candidates, then keep only the strongest
-        # few. Sections each surface ~2 → a long report yields 10+; the
-        # GT is 0-3, so emitting them all destroys precision. Rank by
-        # grounding strength (cites a structured source / hard number /
-        # an internal contradiction) and fill the remaining budget.
+        # Propose-then-verify. Stage 1 (recall): the grounded check
+        # surfaces many CANDIDATES — no hard cap kills true positives
+        # here. Stage 2 (precision): each candidate gets its own focused
+        # fact-check (targeted retrieval + strict confirm/reject). The
+        # per-candidate loop is the precision gate, replacing the blunt
+        # cap that was dropping real issues.
         cand: list[tuple[int, str, str]] = []
         for q, r in self._grounded_check(evidence, facts, sections):
             raw = anc.find_raw(q)
@@ -389,13 +395,49 @@ class ReviewAgent:
             seen_raw.add(raw)
             cand.append((self._ground_score(r), raw, r))
         cand.sort(key=lambda x: -x[0])
-        for _, raw, r in cand:
+        cand = cand[:self._MAX_CANDIDATES]          # bound LLM calls only
+        _log(f"{len(claims)} claims, {len(exact)} det-exact, "
+             f"{len(cand)} candidates; verifying each ...")
+        for _, raw, hint in cand:
             if len(issues) >= self._MAX_ISSUES:
                 break
-            issues.append(ReviewIssue(quote=raw, reason=r))
+            ok = self._verify_issue(raw, hint, primary, facts)
+            if ok:
+                issues.append(ReviewIssue(quote=raw, reason=ok))
 
         _log(f"done ({time.time() - t0:.1f}s, {len(issues)} issues)")
         return issues[:self._MAX_ISSUES]
+
+    def _verify_issue(self, quote: str, hint: str, primary: list[str],
+                      facts: str) -> str | None:
+        """Stage-2 precision gate: focused, per-candidate fact-check.
+        Pull evidence targeted at THIS quote and let the LLM confirm or
+        reject. Returns the confirmed reason, or None to drop. Any
+        failure or non-confirm => drop (precision-first)."""
+        try:
+            res = self.retriever.search(
+                quote[:600], top_k=5, tickers=primary or None)
+            evidence = res.evidence_block()[:3000]
+        except Exception:
+            evidence = "(no passages)"
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._verify_p.format(
+                      quote=quote[:1200], hint=(hint or "")[:600],
+                      facts=facts[:6000], evidence=evidence)}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        if str(data.get("verdict", "")).strip().lower() != "confirm":
+            return None
+        reason = str(data.get("reason", "")).strip()
+        return reason or None
 
     @staticmethod
     def _ground_score(reason: str) -> int:
