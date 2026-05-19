@@ -30,11 +30,14 @@ _METRIC = [
 ]
 _Q_RE = re.compile(
     r"Q\s?([1-4])(?![0-9])|(?<![A-Za-z])([1-4])\s?Q(?![A-Za-z])|"
-    r"(first|second|third|fourth)\s+quarter",
+    r"(first|second|third|fourth)\s+quarter|"
+    r"(第一|第二|第三|第四|一|二|三|四)\s*季度",
     re.I)
 _FY_RE = re.compile(
     r"FY\s?(\d{2,4})|fiscal(?:\s+year)?\s+(\d{4})|\b(20\d{2})\b", re.I)
-_QWORD = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+_QWORD = {"first": 1, "second": 2, "third": 3, "fourth": 4,
+          "第一": 1, "一": 1, "第二": 2, "二": 2,
+          "第三": 3, "三": 3, "第四": 4, "四": 4}
 
 
 def _parse_period(text: str) -> tuple[int | None, int | None]:
@@ -47,6 +50,8 @@ def _parse_period(text: str) -> tuple[int | None, int | None]:
             q = int(qm.group(2))
         elif qm.group(3):
             q = _QWORD.get(qm.group(3).lower())
+        elif qm.group(4):
+            q = _QWORD.get(qm.group(4))
     ym = _FY_RE.search(text)
     y = None
     if ym:
@@ -60,7 +65,38 @@ def _parse_period(text: str) -> tuple[int | None, int | None]:
 
 _EARN_CUE = re.compile(
     r"\b(actual|consensus|estimate|surprise|beat|miss|eps|"
-    r"earnings per share)\b", re.I)
+    r"earnings per share)\b|每股收益|预期|一致预期|高于|低于", re.I)
+
+
+_CLAIM_CUE = re.compile(
+    r"(\$|\d+(?:\.\d+)?\s*%|\b20\d{2}\b|Q[1-4]|FY\s?\d{2,4}|"
+    r"million|billion|trillion|EPS|consensus|estimate|surprise|"
+    r"beat|miss|above|below|growth|decline|increase|decrease|"
+    r"upgrade|downgrade|peer|basket|Bloomberg|CNBC|Reuters|Benzinga|"
+    r"Wall Street Journal|WSJ|Fierce Pharma|8-K|10-K|10-Q|"
+    r"亿|万亿|百万|季度|财年|每股收益|一致预期|高于|低于|增长|下降|"
+    r"上调|下调|评级|召回|披露|报道|股东会|市值|客户资产|同业|可比公司)",
+    re.I)
+_WEAK_FRAGMENT = re.compile(
+    r"^\s*(?:Q[1-4]\s*(?:FY)?\s*\d{2,4}|FY\s?\d{2,4}|"
+    r"\d{4}-\d{2}-\d{2}|[A-Za-z]+\s+\d{1,2}|December\s+quarter|"
+    r"April low close|January\s+\d{1,2}|December\s+\d{1,2})\s*$",
+    re.I)
+_SOURCE_CUE = re.compile(
+    r"Bloomberg|CNBC|Reuters|Benzinga|Wall Street Journal|WSJ|"
+    r"Fierce Pharma|SEC|Form\s+[0-9A-Z-]+|8-K|10-K|10-Q|披露|报道",
+    re.I)
+_PEER_CUE = re.compile(r"peer|peers\.json|basket|同业|可比公司", re.I)
+_PRICE_CUE = re.compile(
+    r"opened|closed|close-to-close|52-week|price gain|price decline|"
+    r"calendar-year|YTD|year-to-date|开盘|收盘|年初至今|过去一年|涨幅|跌幅",
+    re.I)
+_DIR_DOWN = re.compile(
+    r"miss|below|decline|decrease|down|lower|downgrade|下降|下滑|低于|下调|"
+    r"减少|回落", re.I)
+_DIR_UP = re.compile(
+    r"beat|above|increase|growth|up|higher|upgrade|增长|上升|高于|上调|提升",
+    re.I)
 
 
 def _claim_metric(text: str) -> str | None:
@@ -89,6 +125,7 @@ _MONTHS = {m: i + 1 for i, m in enumerate(
 _DATE_ISO = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
 _DATE_MDY = re.compile(
     r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(20\d{2})\b")
+_DATE_CN = re.compile(r"\b(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\b")
 
 
 def _claim_form(text: str) -> str | None:
@@ -108,6 +145,8 @@ def _parse_dates(text: str) -> list[str]:
         mi = _MONTHS.get(mon.lower())
         if mi:
             out.append(f"{y}-{mi:02d}-{int(d):02d}")
+    for y, mo, d in _DATE_CN.findall(text):
+        out.append(f"{y}-{int(mo):02d}-{int(d):02d}")
     return out
 
 
@@ -117,9 +156,16 @@ _NUMTOK = r"\$?\s*(-?\d[\d,]*\.?\d*)"
 _RX_ACTUAL = re.compile(
     r"(?:actual|reported|posted|delivered|came in at|print of|eps of)"
     r"\D{0,18}?" + _NUMTOK, re.I)
+_RX_ACTUAL_BEFORE = re.compile(
+    r"(?<![A-Za-z])" + _NUMTOK
+    + r"\D{0,12}?(?:actual|reported|posted|delivered|实际)", re.I)
 _RX_EST = re.compile(
     r"(?:consensus|estimate[sd]?|expected|street|forecast)"
     r"\D{0,18}?" + _NUMTOK, re.I)
+_RX_EST_BEFORE = re.compile(
+    r"(?<![A-Za-z])" + _NUMTOK
+    + r"\D{0,12}?(?:consensus|estimate[sd]?|expected|预期|一致预期)",
+    re.I)
 _RX_MISS = re.compile(r"\b(miss|missed|shortfall|fell short|below)\b", re.I)
 _RX_BEAT = re.compile(r"\b(beat|beats|topped|surpass|above)\b", re.I)
 
@@ -140,13 +186,13 @@ def _eps_problems(quote: str, row: dict) -> list[str]:
     sp = row.get("surprisePercent")
     surp = row.get("surprise")
 
-    m = _RX_ACTUAL.search(quote)
+    m = _RX_ACTUAL_BEFORE.search(quote) or _RX_ACTUAL.search(quote)
     if m and isinstance(act, (int, float)):
         v = _f(m.group(1))
         if v is not None and abs(v) <= 1000 and not approx_equal(v, act):
             probs.append(f"claimed actual EPS {v:g} but verified "
                          f"actual is {act:g}")
-    m = _RX_EST.search(quote)
+    m = _RX_EST.search(quote) or _RX_EST_BEFORE.search(quote)
     if m and isinstance(est, (int, float)):
         v = _f(m.group(1))
         if v is not None and abs(v) <= 1000 and not approx_equal(v, est):
@@ -182,6 +228,30 @@ class ReviewAgent:
         false-match common words, so rank by (frequency, length) over
         the whole report and prefer a `(TICKER)` / `$TICKER` mention —
         not the alphabetically-first resolved symbol."""
+        universe = set(self.retriever.subject_universe())
+        explicit: list[str] = []
+        patterns = [
+            r"\((?:NYSE|NASDAQ|Nasdaq|纳斯达克|纽交所)\s*[:：]\s*([A-Z.]{1,6})\)",
+            r"(?:NYSE|NASDAQ|Nasdaq|纳斯达克|纽约证券交易所|股票代码|交易代码|代码)\s*[:：]?\s*([A-Z.]{1,6})",
+            r"\((?:[A-Z]{2,5},\s*)+[A-Z]{2,5}\)",
+            r"Coverage:\s*([A-Z.,\s]+)\s*[—-]",
+        ]
+        for pat in patterns:
+            for m in re.finditer(pat, report):
+                toks = re.findall(r"\b[A-Z.]{1,6}\b", m.group(0))
+                for t in toks:
+                    if len(t) >= 2 and t in universe and t not in explicit:
+                        explicit.append(t)
+        if not explicit:
+            head = report[:1500]
+            for t in re.findall(r"\b[A-Z.]{2,6}\b", head):
+                if t in universe and t not in {"NYSE", "NASDAQ", "SEC", "CIK"} \
+                        and t not in explicit:
+                    explicit.append(t)
+        if explicit:
+            # Return several only for deliberate sector-comparison notes.
+            return explicit[:6] if len(explicit) > 1 else explicit
+
         allt = self.retriever.entity.resolve(report)
         if not allt:
             return []
@@ -190,7 +260,10 @@ class ReviewAgent:
             explicit = (f"({t})" in report) or (f"${t}" in report)
             return (explicit, report.count(t), len(t))
 
-        return [max(allt, key=score)]
+        best = max(allt, key=score)
+        if len(best) <= 2 and not ((f"({best})" in report) or (f"${best}" in report)):
+            return []
+        return [best]
 
     def _scope(self, quote: str, primary: list[str]) -> list[str]:
         """Tickers a deterministic check may run against. Prefer tickers
@@ -199,9 +272,13 @@ class ReviewAgent:
         `(T)`/`$T`/repeated) — a shaky 1-2 letter primary would risk
         verifying the claim against the wrong company's facts."""
         inq = self.retriever.entity.resolve(quote)
+        universe = set(self.retriever.subject_universe())
+        for tok in re.findall(r"\b[A-Z.]{2,6}\b", quote):
+            if tok in universe and tok not in inq:
+                inq.append(tok)
         if inq:
             return inq[:3]
-        if primary and len(primary[0]) >= 3:
+        if len(primary) == 1 and len(primary[0]) >= 3:
             return primary
         return []
 
@@ -213,21 +290,25 @@ class ReviewAgent:
             print(f"[rev] {m}", file=sys.stderr, flush=True)
 
         t0 = time.time()
-        _log("extracting claims (LLM) ...")
+        _log("extracting claims (regex + LLM) ...")
         claims = self._extract(report)
         primary = self._primary_ticker(report)
 
         candidates: list[dict] = []
         used: set[str] = set()
         for c in (self._numeric_candidates(claims, primary)
-                  + self._date_candidates(claims, primary)):
+                  + self._date_candidates(claims, primary)
+                  + self._period_end_candidates(claims, primary)
+                  + self._price_candidates(claims, primary)
+                  + self._peer_candidates(claims, primary)
+                  + self._arithmetic_candidates(claims)):
             if c["quote"] in used:
                 continue
             candidates.append(c)
             used.add(c["quote"])
         _log(f"{len(claims)} claims, {len(candidates)} deterministic "
              f"candidates; retrieving for the rest ...")
-        for c in self._retrieval_candidates(claims, used):
+        for c in self._retrieval_candidates(claims, used, primary):
             candidates.append(c)
 
         _log(f"adjudicating {len(candidates)} candidates (LLM) ...")
@@ -243,22 +324,130 @@ class ReviewAgent:
     # ---- step 1: extract -------------------------------------------
 
     def _extract(self, report: str) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+
+        def add(q: str, kind: str = "other") -> None:
+            q = q.strip()
+            if not self._good_quote(q, report):
+                return
+            # Keep the more complete quote when one contains another.
+            for old in list(seen):
+                if q != old and old in q and len(q) > len(old) + 12:
+                    seen.remove(old)
+                    out[:] = [x for x in out if x["quote"] != old]
+                elif q != old and q in old:
+                    return
+            if q not in seen:
+                out.append({"quote": q, "kind": kind,
+                            "claim_type": self._claim_type(q)})
+                seen.add(q)
+
+        for q in self._regex_claims(report):
+            add(q, self._claim_type(q))
+
         try:
             raw = chat(
                 [{"role": "user",
-                  "content": self._extract_p.format(report=report[:12000])}],
+                  "content": self._extract_p.format(report=report[:16000])}],
                 config=self.llm,
                 **{**self.params, "response_format": {"type": "json_object"}})
             cl = parse_json_obj(raw).get("claims", [])
         except Exception:
             cl = []
-        out = []
         for c in cl if isinstance(cl, list) else []:
             if isinstance(c, dict) and isinstance(c.get("quote"), str):
-                q = c["quote"].strip()
-                if q and q in report:
-                    out.append({"quote": q, "kind": c.get("kind", "other")})
-        return out[:15]
+                add(c["quote"], c.get("kind", "other"))
+
+        out.sort(key=lambda x: self._claim_priority(x["quote"]), reverse=True)
+        return out[:40]
+
+    def _good_quote(self, q: str, report: str) -> bool:
+        if not q or q not in report:
+            return False
+        if len(q) < 18 or _WEAK_FRAGMENT.match(q):
+            return False
+        return bool(_CLAIM_CUE.search(q))
+
+    def _regex_claims(self, report: str) -> list[str]:
+        claims: list[str] = []
+        lines = report.splitlines()
+        i = 0
+        while i < len(lines):
+            raw = lines[i]
+            line = raw.strip()
+            if re.match(r"^[-*]\s+", line):
+                block = [raw]
+                j = i + 1
+                while j < len(lines):
+                    nxt = lines[j]
+                    s = nxt.strip()
+                    if not s:
+                        break
+                    if re.match(r"^(#|[-*]\s+|\|)", s):
+                        break
+                    block.append(nxt)
+                    j += 1
+                q = "\n".join(block).strip()
+                if _CLAIM_CUE.search(q):
+                    claims.append(q)
+                i = j
+                continue
+            if line.startswith("|") and _CLAIM_CUE.search(line):
+                claims.append(line)
+            i += 1
+
+        # Single lines catch compact prose and table rows exactly.
+        for raw in lines:
+            line = raw.strip()
+            if not line or len(line) < 18:
+                continue
+            if line.startswith("#"):
+                continue
+            if _CLAIM_CUE.search(line):
+                claims.append(line)
+        # Paragraph pass keeps original newlines so quotes remain substrings.
+        for para in re.split(r"\n\s*\n", report):
+            para = para.strip()
+            if len(para) < 30 or para.startswith("#"):
+                continue
+            one_line = " ".join(x.strip() for x in para.splitlines()
+                                if x.strip())
+            for sent in re.split(r"(?<=[。！？.!?])\s+", one_line):
+                sent = sent.strip()
+                if 25 <= len(sent) <= 420 and _CLAIM_CUE.search(sent) \
+                        and sent in report:
+                    claims.append(sent)
+            if 30 <= len(para) <= 420 and _CLAIM_CUE.search(para):
+                claims.append(para)
+        return claims
+
+    def _claim_type(self, q: str) -> str:
+        if _PEER_CUE.search(q):
+            return "peer_membership"
+        if _SOURCE_CUE.search(q) and _parse_dates(q):
+            return "source_attribution"
+        if _PRICE_CUE.search(q):
+            return "derived_calculation"
+        if _DIR_UP.search(q) or _DIR_DOWN.search(q):
+            return "direction_reversal"
+        if _parse_dates(q) or _claim_form(q):
+            return "date_timeline"
+        if parse_numbers(q):
+            return "numeric_mutation"
+        return "other"
+
+    def _claim_priority(self, q: str) -> tuple[int, int]:
+        typ = self._claim_type(q)
+        rank = {
+            "direction_reversal": 7,
+            "derived_calculation": 6,
+            "numeric_mutation": 5,
+            "date_timeline": 5,
+            "peer_membership": 5,
+            "source_attribution": 4,
+        }.get(typ, 1)
+        return rank, min(len(q), 500)
 
     # ---- step 2a: period-aligned numeric candidates ----------------
 
@@ -292,6 +481,9 @@ class ReviewAgent:
                                     + "; ".join(probs))})
                     break
                 # revenue / net_income: period-aligned single value
+                if quarter is None or re.search(
+                    r"nine[- ]month|nine months|9M|上半年|九个月", q, re.I):
+                    continue
                 rows = self.retriever.fact_store.metric(
                     tk, metric, year=year, quarter=quarter)
                 if not rows:
@@ -328,6 +520,9 @@ class ReviewAgent:
             dates = _parse_dates(q)
             if not form or not dates:
                 continue
+            if not re.search(r"filed|submitted|filing date|filed with|"
+                             r"提交|备案|披露日期|提交日", q, re.I):
+                continue
             tickers = self._scope(q, primary)
             if not tickers:
                 continue
@@ -351,19 +546,157 @@ class ReviewAgent:
                 break
         return out
 
+    def _period_end_candidates(self, claims: list[dict],
+                               primary: list[str]) -> list[dict]:
+        out: list[dict] = []
+        for c in claims:
+            q = c["quote"]
+            if not re.search(r"ended|ending|截至|结束", q, re.I):
+                continue
+            dates = _parse_dates(q)
+            if not dates:
+                continue
+            year, quarter = _parse_period(q)
+            if year is None or quarter is None:
+                continue
+            for tk in self._scope(q, primary):
+                rows = self.retriever.fact_store.period_rows(
+                    tk, year=year, quarter=quarter)
+                ends = sorted({r.get("endDate") for r in rows
+                               if r.get("endDate")})
+                if not ends or any(d in ends for d in dates):
+                    continue
+                out.append({
+                    "quote": q,
+                    "kind": "date_timeline",
+                    "evidence": (
+                        f"DETERMINISTIC FACT [SOURCE: research/{tk}/"
+                        f"financials_reported.json] {tk} FY{year} Q{quarter} "
+                        f"period endDate is {', '.join(ends)}. The claim's "
+                        f"date {', '.join(dates)} does not match.")})
+                break
+        return out
+
+    def _price_candidates(self, claims: list[dict],
+                          primary: list[str]) -> list[dict]:
+        out: list[dict] = []
+        for c in claims:
+            q = c["quote"]
+            if not _PRICE_CUE.search(q):
+                continue
+            years = [int(y) for y in re.findall(r"\b(20\d{2})\b", q)]
+            year = min(years) if years else 2025
+            pcts = [n.value for n in parse_numbers(q) if n.is_pct]
+            dates = _parse_dates(q)
+            for tk in self._scope(q, primary):
+                facts: list[str] = []
+                mismatch = False
+                win = self.retriever.fact_store.price_window(tk, year)
+                if win and win.get("return_pct") is not None:
+                    ret = float(win["return_pct"])
+                    facts.append(
+                        f"{tk} {win['first_date']} close={win['first']['close']} "
+                        f"-> {win['last_date']} close={win['last']['close']} "
+                        f"return={ret:+.1f}%")
+                    if pcts and re.search(
+                        r"calendar-year|close-to-close|price gain|price decline|"
+                        r"\breturn\b|年初至今.*(?:涨幅|跌幅)|"
+                        r"过去一年.*(?:涨幅|跌幅)|全年.*(?:涨幅|跌幅)|"
+                        r"年度.*(?:涨幅|跌幅)|年内.*(?:涨幅|跌幅)", q, re.I):
+                        if not any(abs(p - ret) <= max(1.0, abs(ret) * 0.08)
+                                   for p in pcts):
+                            mismatch = True
+                for d in dates:
+                    row = self.retriever.fact_store.price_on(tk, d)
+                    if row:
+                        facts.append(
+                            f"{tk} {d} open={row['open']} close={row['close']} "
+                            f"high={row['high']} low={row['low']}")
+                if mismatch:
+                    out.append({
+                        "quote": q,
+                        "kind": "derived_calculation",
+                        "evidence": (
+                            "DETERMINISTIC FACT [SOURCE: prices/"
+                            f"{tk}.csv] " + "; ".join(facts)
+                            + ". The claim's stated return/price calculation "
+                              "does not match the price file.")})
+                    break
+        return out
+
+    def _peer_candidates(self, claims: list[dict],
+                         primary: list[str]) -> list[dict]:
+        out: list[dict] = []
+        for c in claims:
+            q = c["quote"]
+            if not re.search(r"peer(?:s)?(?:\.json| list| basket)|peer basket|"
+                             r"peer list|可比公司列表|同业列表", q, re.I):
+                continue
+            for tk in self._scope(q, primary):
+                peers = self.retriever.fact_store.peers(tk)
+                if not peers:
+                    continue
+                claimed = [x for x in re.findall(r"\b[A-Z][A-Z.]{1,5}\b", q)
+                           if x not in {"EPS", "FY", "QOQ", "YOY", "SEC"}]
+                # The subject itself may appear in prose; compare only
+                # explicit list members after the possessive subject.
+                extras = sorted({x for x in claimed if x != tk and x not in peers})
+                if extras:
+                    out.append({
+                        "quote": q,
+                        "kind": "peer_membership",
+                        "evidence": (
+                            f"DETERMINISTIC FACT [SOURCE: research/{tk}/"
+                            f"peers.json] {tk} peer list is {peers}. "
+                            f"Extra claimed tickers not in peers: {extras}.")})
+                    break
+        return out
+
+    def _arithmetic_candidates(self, claims: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        for c in claims:
+            q = c["quote"]
+            if not re.search(r"环比|QoQ|较", q, re.I):
+                continue
+            vals = []
+            for m in re.finditer(r"\$\s*(-?\d+(?:\.\d+)?)|"
+                                 r"(-?\d+(?:\.\d+)?)\s*美元", q):
+                vals.append(float(m.group(1) or m.group(2)))
+            pcts = [n.value for n in parse_numbers(q) if n.is_pct]
+            if len(vals) < 2 or not pcts:
+                continue
+            a, b, claimed = vals[0], vals[1], pcts[-1]
+            if b == 0:
+                continue
+            calc = (a / b - 1) * 100
+            mismatch = abs(claimed - calc) > max(1.0, abs(calc) * 0.08)
+            polarity_bad = ((calc > 0 and _DIR_DOWN.search(q)) or
+                            (calc < 0 and _DIR_UP.search(q)))
+            if mismatch or polarity_bad:
+                out.append({
+                    "quote": q,
+                    "kind": "derived_calculation",
+                    "evidence": (
+                        f"DETERMINISTIC FACT arithmetic: using {a:g} vs {b:g}, "
+                        f"the derived change is {calc:+.1f}%, not {claimed:g}%. "
+                        "The claim's stated magnitude or direction does not match.")})
+        return out
+
     # ---- step 2b: retrieval candidates for the rest ----------------
 
     def _retrieval_candidates(self, claims: list[dict],
-                              used: set[str]) -> list[dict]:
+                              used: set[str],
+                              primary: list[str]) -> list[dict]:
         out = []
-        for c in claims[:10]:
+        for c in claims[:25]:
             q = c["quote"]
             if q in used:
                 continue
-            res = self.retriever.search(q, top_k=4)
+            tickers = self._scope(q, primary)
+            res = self.retriever.search(q, top_k=4, tickers=tickers or None)
             out.append({"quote": q,
                         "evidence": res.evidence_block()[:2500],
-                        "kind": "narrative"})
+                        "kind": c.get("claim_type") or "narrative"})
         return out
 
     # ---- step 3: single LLM adjudication over ALL candidates -------
@@ -372,6 +705,7 @@ class ReviewAgent:
         if not candidates:
             return []
         blocks = "\n\n".join(
+            f'CLAIM_TYPE: {c.get("kind", "unknown")}\n'
             f'CLAIM: "{c["quote"]}"\nEVIDENCE:\n{c["evidence"]}'
             for c in candidates)
         try:

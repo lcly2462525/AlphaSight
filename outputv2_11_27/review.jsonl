@@ -1,0 +1,20 @@
+{"request_id": "report_01", "issues": []}
+{"request_id": "report_02", "issues": []}
+{"request_id": "report_03", "issues": []}
+{"request_id": "report_04", "issues": []}
+{"request_id": "report_05", "issues": []}
+{"request_id": "report_06", "issues": []}
+{"request_id": "report_07", "issues": [{"quote": "nine months ended Sept 30, 2025", "reason": "The evidence shows that Walmart's financial reporting periods are based on a fiscal calendar ending October 31, with the nine months ended October 31, 2025, not September 30, 2025. The filings repeatedly reference 'Nine Months Ended October 31, 2025' as the correct period."}]}
+{"request_id": "report_08", "issues": []}
+{"request_id": "report_09", "issues": []}
+{"request_id": "report_10", "issues": []}
+{"request_id": "report_11", "issues": []}
+{"request_id": "report_12", "issues": []}
+{"request_id": "report_13", "issues": []}
+{"request_id": "report_14", "issues": []}
+{"request_id": "report_15", "issues": []}
+{"request_id": "report_16", "issues": [{"quote": "158.10 亿", "reason": "The deterministic fact states that intangible asset amortization expense was $158 million, not 158.10 billion. The claim exaggerates the value by a factor of 1000."}, {"quote": "79.60 亿美元", "reason": "The deterministic fact states the value is $79,648 million, which equals $79.648 billion, not $79.60 billion. The claim's value does not match the authoritative figure."}, {"quote": "11.30 亿美元", "reason": "The deterministic fact shows an EBIT margin of 11.3% for fiscal 2024, not a dollar amount of 11.30 billion. The claim misrepresents a percentage as a monetary value."}, {"quote": "16.50 亿美元", "reason": "The evidence states Tim Cook bought $3 million worth of Nike stock, not $16.50 billion. The claim is off by orders of magnitude and lacks support."}]}
+{"request_id": "report_17", "issues": [{"quote": "52 周高点**：约 **89.44 美元**", "reason": "The evidence from a news article states that Nike's 52-week high is $82.44, not $89.44 as claimed."}]}
+{"request_id": "report_18", "issues": []}
+{"request_id": "report_19", "issues": []}
+{"request_id": "report_20", "issues": [{"quote": "Skyrizi 录得 **$47.1 亿**（+46.0% CER）", "reason": "The evidence states Skyrizi sales were $4.7 billion, not $47.1 billion. The percentage growth of 46% is correct, but the dollar amount is off by an order of magnitude."}, {"quote": "Rinvoq 录得 **$21.8 亿**（+34.1% CER", "reason": "The evidence states Rinvoq sales were ~$2.2 billion, not $21.8 billion. The growth rate of 34.1% is accurate, but the dollar amount is incorrect."}]}

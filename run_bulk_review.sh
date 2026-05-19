@@ -13,7 +13,7 @@ mkdir -p generatedataset
 python3 generate_dataset.py \
   --root "$ROOT" \
   --num_samples 2000 \
-  --max_context_chars 18000 \
-  --writer_models "gpt-4o,gpt-5.1,gpt-5-mini" \
-  --reviewer_models "gpt-5.1-codex,gpt-4o" \
-  --judge_model "gpt-5.1-codex"
+  --max_context_chars 24000 \
+  --writer_models "gpt-4o" \
+  --reviewer_models "gpt-4o" \
+  --judge_model "gpt-4o"

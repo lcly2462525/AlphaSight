@@ -27,6 +27,7 @@ class TickerFacts:
     earnings: list[dict] = field(default_factory=list)   # eps actual/est/surprise
     financials: list[dict] = field(default_factory=list)  # rev / ni per quarter
     prices: dict[str, dict] = field(default_factory=dict)  # date -> ohlcv
+    peers: list[str] = field(default_factory=list)
 
 
 class FactStore:
@@ -54,6 +55,7 @@ class FactStore:
         tf = TickerFacts(ticker=ticker)
         self._load_earnings(ticker, tf)
         self._load_financials(ticker, tf)
+        self._load_peers(ticker, tf)
         self._load_prices(ticker, tf)
         return tf
 
@@ -121,8 +123,21 @@ class FactStore:
             tf.financials.append({
                 "year": r.get("year"), "quarter": r.get("quarter"),
                 "form": r.get("form"), "revenue": rev, "net_income": ni,
+                "startDate": (r.get("startDate") or "")[:10],
                 "endDate": (r.get("endDate") or "")[:10],
+                "filedDate": (r.get("filedDate") or "")[:10],
             })
+
+    def _load_peers(self, ticker: str, tf: TickerFacts) -> None:
+        p = self._research / ticker / "peers.json"
+        if not p.exists():
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")).get("data", [])
+        except (json.JSONDecodeError, ValueError, OSError):
+            return
+        if isinstance(data, list):
+            tf.peers = [str(x).upper() for x in data if isinstance(x, str)]
 
     def _load_prices(self, ticker: str, tf: TickerFacts) -> None:
         p = self._prices / f"{ticker}.csv"
@@ -184,6 +199,43 @@ class FactStore:
 
     def lookup(self, ticker: str) -> TickerFacts:
         return self._load(ticker)
+
+    def peers(self, ticker: str) -> list[str]:
+        return list(self._load(ticker).peers)
+
+    def period_rows(self, ticker: str, *,
+                    year: int | None = None,
+                    quarter: int | None = None) -> list[dict]:
+        out = []
+        for f in self._load(ticker).financials:
+            if year is not None and f.get("year") != year:
+                continue
+            if quarter is not None and f.get("quarter") != quarter:
+                continue
+            out.append(f)
+        return out
+
+    def price_on(self, ticker: str, date: str) -> dict | None:
+        return self._load(ticker).prices.get(date)
+
+    def price_window(self, ticker: str, year: int) -> dict | None:
+        prices = self._load(ticker).prices
+        days = sorted(d for d in prices if d.startswith(f"{year}-"))
+        if not days:
+            return None
+        first, last = days[0], days[-1]
+        first_row = prices[first]
+        last_row = prices[last]
+        c0 = first_row.get("close")
+        c1 = last_row.get("close")
+        ret = (c1 / c0 - 1) * 100 if c0 else None
+        return {
+            "first_date": first,
+            "last_date": last,
+            "first": first_row,
+            "last": last_row,
+            "return_pct": ret,
+        }
 
     def metric(self, ticker: str, metric: str, *,
                year: int | None = None,
