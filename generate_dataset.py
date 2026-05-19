@@ -442,7 +442,15 @@ Important requirements:
 - Include summary, key findings, risks, and forward view.
 - Use concrete dates, financial figures, product names, regulatory events, market cap, EPS, revenue, guidance, or acquisition details when possible.
 - Do not cite source filenames.
-- It is acceptable to include some subtle factual mistakes, unsupported extrapolations, or overconfident claims.
+- Include a few realistic analyst mistakes so the downstream review task is meaningful.
+  These should look like normal human oversights, not obvious fabrications:
+  overlooking an important caveat or clue in the evidence, conflating similar
+  products/segments/companies, mixing up GAAP vs non-GAAP or quarterly vs annual
+  figures, misreading small text in a table/chart, confusing dates or fiscal
+  periods, transposing digits, decimal points, percentages, or units, or drawing
+  an overconfident conclusion from incomplete evidence.
+- Keep the mistakes subtle and embedded naturally in an otherwise professional
+  brief. Do not explain that you are making mistakes.
 - Make the brief 800-1600 words.
 - Do not say this is synthetic data.
 
