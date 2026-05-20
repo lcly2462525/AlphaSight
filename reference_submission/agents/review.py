@@ -356,6 +356,7 @@ class ReviewAgent:
         self._adj_p = load_prompt("adjudicate.md")
         self._veto_p = load_prompt("verify_exact.md")
         self._grounded_p = load_prompt("grounded_review.md")
+        self._news_p = load_prompt("news_grounded_check.md")
         self._filter_p = load_prompt("filter_candidates.md")
         self._translate_p = load_prompt("translate_claims.md")
 
@@ -477,8 +478,22 @@ class ReviewAgent:
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
              f"grounded check over {len(sections)} sections "
              f"(shared evidence pool) ...")
-        grounded = self._filter_candidates(
-            self._grounded_check(evidence, facts, sections), facts)
+        # Two parallel candidate streams, then ONE union before the
+        # filter:
+        # - _grounded_check: generic per-section pass (broad coverage)
+        # - _news_grounded_check: dedicated news-anchored pass with the
+        #   SKILL.md four-class taxonomy + train_gt few-shot. Targets
+        #   the narrative class where _grounded_check has historically
+        #   missed (sign inversion / source misattribution / specific
+        #   narrative numbers and dates).
+        seen_q: set[str] = set()
+        merged: list[tuple[str, str]] = []
+        for q, r in (self._grounded_check(evidence, facts, sections)
+                     + self._news_grounded_check(claims, evidence)):
+            if q and q not in seen_q:
+                merged.append((q, r))
+                seen_q.add(q)
+        grounded = self._filter_candidates(merged, facts)
         for q, r in grounded:
             if len(issues) >= self._MAX_ISSUES:
                 break
@@ -635,6 +650,47 @@ class ReviewAgent:
                 if q and r and q not in seen:
                     out.append((q, r))
                     seen.add(q)
+        return out
+
+    def _news_grounded_check(
+            self, claims: list[dict],
+            evidence: str) -> list[tuple[str, str]]:
+        """Dedicated news-anchored pass: ONE LLM call over the whole
+        claim list with a prompt anchored on the SKILL.md four-class
+        taxonomy (number/date/sign/source) and train_gt few-shot. The
+        prompt itself instructs the model to skip non-news-anchored
+        and ambiguous claims, so all claims are sent in; the model
+        filters. Fail-open."""
+        if not claims:
+            return []
+        import json as _json
+        quotes = [c["quote"] for c in claims[:24]
+                  if c.get("quote")]
+        if not quotes:
+            return []
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._news_p.format(
+                      evidence=evidence,
+                      claims=_json.dumps(quotes, ensure_ascii=False))}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+        except Exception:
+            return []
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for it in (data.get("issues", [])
+                   if isinstance(data, dict) else []):
+            if not isinstance(it, dict):
+                continue
+            q = str(it.get("quote", "")).strip()
+            r = str(it.get("reason", "")).strip()
+            if q and r and q not in seen:
+                out.append((q, r))
+                seen.add(q)
         return out
 
     def _filter_candidates(
