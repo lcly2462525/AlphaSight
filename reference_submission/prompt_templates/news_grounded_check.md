@@ -30,6 +30,16 @@ discriminators:
 - "No source supports", "absence", "cannot be confirmed", "no direct
   contradiction" → SKIP. Do NOT emit. If you cannot state the correct
   value/date/direction/outlet, do not emit.
+- **Quarter / period context strict matching**: the evidence's quarter
+  (e.g. `Q3 2025` in an event sentence or its `[EVENT 2025-10-30]` date)
+  MUST match the report's claimed quarter for the comparison to count.
+  Do NOT use a Q3 news figure to refute a Q2 report claim, even if the
+  subject and metric name look identical. Skip when periods mismatch.
+- **Flag the tampered sentence, NOT the corroborated one**: if the
+  report contains two sentences expressing the same subject with
+  different values (one matches evidence, one does not), flag ONLY the
+  one that does NOT match. The matching sentence is correct — do not
+  flag it just because it co-occurs with a tampered sister sentence.
 - Soft narrative, opinions, valuations, forecasts → never flag.
 - Hedged figures (`约`, `approximately`, `roughly`) vs a slightly
   different exact figure → SKIP.
@@ -70,6 +80,23 @@ EXAMPLE F — skip (no concrete contradicting value in evidence)
 - Report quote: "管理层对下半年订阅与广告双引擎的信心"
 - Evidence: (no specific number/date/source flip available)
 - Output: (do not emit — soft narrative)
+
+EXAMPLE G — skip (quarter / period context mismatch)
+- Report quote: "2025 年第二季度，公司营收同比下降约 2%"
+- Evidence: "[EVENT 2025-10-30 | via Yahoo | single_stock] Q3 2025 revenue rose 3.7% YoY, beating consensus."
+- Output: (do not emit — the evidence is about **Q3 2025**, the
+  report claim is about **Q2 2025**; same metric name, different
+  period, NOT a contradiction)
+
+EXAMPLE H — pick the tampered sentence, not the corroborated one
+- Report contains TWO sentences about the same subject in different
+  sections:
+  S1 (tampered): "「NextEra Energy 二季度业绩强劲，调整后每股收益同比增长 12.4%。」"
+  S2 (correct):  "CEO 在二季度电话会议中明确表示：调整后 EPS **同比增长 9.4%**。"
+- Evidence: "[EVENT 2025-07-23 | bullish | via Investing.com] NEE adjusted EPS grew 9.4% YoY in Q2."
+- Output: {{"quote": "「NextEra Energy 二季度业绩强劲，调整后每股收益同比增长 12.4%。」", "reason": "Per news: NEE Q2 调整后 EPS 同比增长为 9.4%，被篡改为 12.4%。"}}
+- Do NOT emit a flag for S2 — it MATCHES evidence and is therefore
+  correct; emitting it would be a false flag in the reverse direction.
 
 # INPUT
 

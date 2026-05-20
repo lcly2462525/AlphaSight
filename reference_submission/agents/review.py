@@ -129,7 +129,20 @@ _SELF_NEG_RE = re.compile(
     r"(?:contradiction|issue|valid\s+issue))|"
     r"statement\s+is\s+supported|"
     r"(?:claim|statement|value|figure)\s+(?:itself\s+)?is\s+(?:actually\s+)?correct|"
-    r"hard\s+rule:\s*only\s+flag",
+    r"hard\s+rule:\s*only\s+flag|"
+    # Chinese self-cancels — patterns observed in review (20) FPs that
+    # the English regex misses. "未确认/无法确认" + "原文不确定性"
+    # are the most common offenders (model concedes the report's
+    # certainty exceeds source certainty, then still emits).
+    r"未[被能]?确认|无法确认|不能确认|"
+    r"无(?:法|可)(?:判[断定]|核实|断定)|"
+    r"表述为既定事实|原文不确定性|"
+    r"未(?:被|获)?(?:source|来源|资料)\s*支持|"
+    r"无\s*(?:source|来源|文献|资料)\s*支持|"
+    r"(?:不能|无法)\s*据此\s*判[断定]|"
+    r"无明确(?:反证|矛盾|证据)|"
+    r"非(?:直接)?矛盾|"
+    r"暂无证据",
     re.I)
 # Chinese 亿 vs English billion: "X 亿美元" = X×100M USD = (X/10) billion.
 # When a candidate's reason claims a 10x / order-of-magnitude error and
@@ -167,6 +180,26 @@ def _yi_magnitude_misread(quote: str, reason: str) -> bool:
     亿 (= 100M, so X 亿美元 is (X/10) billion, not X billion)."""
     return bool(_YI_IN_QUOTE.search(quote or "")
                 and _TEN_X_RE.search(reason or ""))
+
+
+# Markdown decoration that shows up at quote starts and breaks naive
+# string-equality dedup — `> `, `**`, `#`, `-`, `*`, `|`. Same factual
+# quote with different blockquote / bold / list prefixes must collapse.
+_QUOTE_DECOR_RE = re.compile(r'(?:^|\n)[\s>*#\-|]+')
+
+
+def _quote_dedup_key(quote: str) -> str:
+    """Normalized prefix used for dedup across grounded/news passes.
+
+    Strips leading markdown decoration at every line start, collapses
+    whitespace, and takes the first 100 chars. Long enough to be
+    unique across reports, short enough to merge two near-identical
+    quotes that differ only in trailing prose or markdown wrapping."""
+    if not quote:
+        return ""
+    norm = _QUOTE_DECOR_RE.sub(" ", quote)
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    return norm[:100]
 _PEER_CUE = re.compile(r"peer|peers\.json|basket|同业|可比公司", re.I)
 _PRICE_CUE = re.compile(
     r"opened|closed|close-to-close|52-week|price gain|price decline|"
@@ -486,13 +519,31 @@ class ReviewAgent:
         #   the narrative class where _grounded_check has historically
         #   missed (sign inversion / source misattribution / specific
         #   narrative numbers and dates).
-        seen_q: set[str] = set()
+        seen_idx: dict[str, int] = {}
         merged: list[tuple[str, str]] = []
         for q, r in (self._grounded_check(evidence, facts, sections)
                      + self._news_grounded_check(claims, evidence)):
-            if q and q not in seen_q:
-                merged.append((q, r))
-                seen_q.add(q)
+            k = _quote_dedup_key(q)
+            # Dedup tolerates markdown wrapping diffs (e.g. one pass
+            # emits the bare line, the other emits the same line with
+            # a leading `> ` blockquote marker — same GT, count once).
+            if not k:
+                continue
+            if k in seen_idx:
+                # Both passes flagged the same factual quote. Prefer
+                # the news-pass reason (starts with "Per news:") when
+                # available — its "class + correct value" format
+                # scores higher on exact-reason than the verbose
+                # generic reason. Take the longer quote for context.
+                old_q, old_r = merged[seen_idx[k]]
+                new_is_news = r.lstrip().startswith("Per news")
+                old_is_news = old_r.lstrip().startswith("Per news")
+                if new_is_news and not old_is_news:
+                    best_q = q if len(q) >= len(old_q) else old_q
+                    merged[seen_idx[k]] = (best_q, r)
+                continue
+            seen_idx[k] = len(merged)
+            merged.append((q, r))
         grounded = self._filter_candidates(merged, facts)
         for q, r in grounded:
             if len(issues) >= self._MAX_ISSUES:
