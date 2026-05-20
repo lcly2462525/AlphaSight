@@ -104,6 +104,12 @@ _DIR_UP = re.compile(
     r"beat|above|increase|growth|up|higher|upgrade|增长|上升|高于|上调|提升",
     re.I)
 
+# Chinese-char detection: gates the Chinese-claim → English-keyword
+# translation that's appended to BM25 queries. The corpus is English
+# (SEC filings, English news), so a Chinese claim's raw text barely
+# matches; the English projection rides alongside for retrieval only.
+_CJK_RE = re.compile(r'[一-鿿]')
+
 
 def _claim_metric(text: str) -> str | None:
     for name, rx in _METRIC:
@@ -275,6 +281,7 @@ class ReviewAgent:
         self._veto_p = load_prompt("verify_exact.md")
         self._grounded_p = load_prompt("grounded_review.md")
         self._filter_p = load_prompt("filter_candidates.md")
+        self._translate_p = load_prompt("translate_claims.md")
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -350,6 +357,11 @@ class ReviewAgent:
         _log("extracting claims (regex + LLM) ...")
         claims = self._extract(anc)
         primary = self._primary_ticker(report)
+        # Translate Chinese claims to English keyword phrases ONCE
+        # (attaches c["q_en"]), then every BM25 query site below appends
+        # q_en alongside the original quote so the English corpus is
+        # actually reachable. No-op for English-only reports.
+        self._attach_translations(claims)
 
         det: list[dict] = []
         used: set[str] = set()
@@ -454,6 +466,53 @@ class ReviewAgent:
                     final.append(s[i:i + 4000])
         return final[:12]
 
+    def _translate_claims(self, claims: list[dict]) -> dict[int, str]:
+        """Chinese reports vs the English corpus: BM25 on Chinese prose
+        barely matches. Batch-translate the Chinese claims to English
+        keyword phrases for the retrieval query ONLY. The emitted quote
+        is still anchored to the original Chinese span elsewhere, so
+        this never touches what is shown to the user. Fail-open: any
+        error returns {} and the caller falls back to signal+prose."""
+        idxs = [i for i, c in enumerate(claims[:24])
+                if _CJK_RE.search(c["quote"])]
+        if not idxs:
+            return {}
+        import json as _json
+        items = _json.dumps(
+            [{"idx": i, "zh": claims[i]["quote"][:200]} for i in idxs],
+            ensure_ascii=False)
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._translate_p.format(items=items)}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+        except Exception:
+            return {}
+        out: dict[int, str] = {}
+        for entry in (data.get("t") or []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                i = int(entry.get("idx", -1))
+            except (TypeError, ValueError):
+                continue
+            en = entry.get("en")
+            if 0 <= i < len(claims) and isinstance(en, str) and en.strip():
+                out[i] = en.strip()
+        return out
+
+    def _attach_translations(self, claims: list[dict]) -> None:
+        """Translate Chinese claims ONCE and attach c['q_en'] (the
+        unit-normalized English projection). Shared by every BM25 path
+        so there is exactly one translation call per report. No-op
+        when nothing is Chinese."""
+        for i, en in self._translate_claims(claims).items():
+            if 0 <= i < len(claims) and en:
+                claims[i]["q_en"] = en
+
     def _evidence_pool(self, primary: list[str],
                        claims: list[dict]) -> str:
         """ONE strong generate-style retrieval, reused across every
@@ -462,8 +521,16 @@ class ReviewAgent:
         subject + the extracted claims — claims carry the specific
         numbers/dates/English entities that actually hit source text."""
         try:
-            q = " ".join((primary or [])
-                         + [c["quote"] for c in claims[:24]])
+            # Mix the raw quote (carries English ticker / source-outlet
+            # names) with q_en (LLM-translated English keywords for the
+            # Chinese ones) so BM25 has the most discriminative tokens.
+            parts: list[str] = list(primary or [])
+            for c in claims[:24]:
+                parts.append(c["quote"])
+                qen = c.get("q_en")
+                if qen:
+                    parts.append(qen)
+            q = " ".join(parts)
             res = self.retriever.search(
                 q[:4000], top_k=14, tickers=primary or None)
             ev = res.evidence_block()
@@ -1140,7 +1207,13 @@ class ReviewAgent:
             if q in used:
                 continue
             tickers = self._scope(q, primary)
-            res = self.retriever.search(q, top_k=4, tickers=tickers or None)
+            # English keyword projection (attached upstream by
+            # _attach_translations) rides alongside the raw quote so
+            # BM25 against the English corpus actually matches.
+            qen = c.get("q_en")
+            query = f"{q} {qen}" if qen else q
+            res = self.retriever.search(query, top_k=4,
+                                        tickers=tickers or None)
             out.append({"quote": q,
                         "evidence": res.evidence_block()[:2500],
                         "kind": c.get("claim_type") or "narrative"})
