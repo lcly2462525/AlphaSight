@@ -37,7 +37,10 @@ from agents.tables import col, parse_tables
 # bullets. The case bullets are the bulk of the tokens; only the few
 # closest to the section being judged are useful. Split them out at
 # init, BM25-index the cases, and serve top-K per call.
-_CASE_LINE_RE = re.compile(r'^\s*-\s*`(tg|val)\s+r\d+', re.IGNORECASE)
+# Case bullets follow the convention `- **<subject>** — <body>`
+# (bold subject as the discriminator). FP-guard / quote-discipline /
+# template bullets in the rubric start with plain text after the dash.
+_CASE_LINE_RE = re.compile(r'^\s*-\s+\*\*[^*]+\*\*\s+—')
 _H2_RE = re.compile(r'^##\s')
 
 
