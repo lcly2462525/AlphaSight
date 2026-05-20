@@ -15,8 +15,10 @@ sections of the review prompt.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterable
 
 from rank_bm25 import BM25Okapi
 
@@ -66,6 +68,128 @@ class NewsEvidence:
     score: float
 
 
+# ---- helpers --------------------------------------------------------
+
+
+def _subject_iter(rec: dict) -> Iterable[dict]:
+    """Yield subject entries that carry a usable ticker mention.
+    Drops role=='tagged_only' — those are end-of-article 'related
+    stocks' tags, not what the event is actually about."""
+    for s in rec.get("subject") or []:
+        if not isinstance(s, dict):
+            continue
+        if s.get("type") != "ticker":
+            continue
+        if s.get("role") == "tagged_only":
+            continue
+        if s.get("mention"):
+            yield s
+
+
+def _build_alias_map(events: Iterable[dict],
+                     valid_tickers: set[str]) -> dict[str, str]:
+    """Mine subject.mention -> ticker aliases from event records.
+
+    Pick top_T by lift relative to the background frequency of T,
+    not raw co-occurrence count — otherwise heavily-discussed tickers
+    (e.g. 'T' for AT&T) outrank the right answer for mentions that
+    co-occur with them by accident (Verizon shows up in many AT&T
+    articles; counts say T, lift says VZ). Accept M -> top_T when:
+      * support n1     >= 5     (enough events to trust the signal)
+      * precision      >= 0.3   (M is at least somewhat concentrated)
+      * lift           >= 3.0   (well above chance)
+    """
+    co: dict[str, Counter] = {}
+    subject_count: Counter = Counter()
+    background: Counter = Counter()
+    total_events = 0
+    for rec in events:
+        sp_tickers: set[str] = set()
+        for p in rec.get("source_paths") or []:
+            parts = str(p).split("/")
+            if (len(parts) >= 2 and parts[0] == "news"
+                    and parts[1] in valid_tickers):
+                sp_tickers.add(parts[1])
+        if not sp_tickers:
+            continue
+        total_events += 1
+        for t in sp_tickers:
+            background[t] += 1
+        for s in _subject_iter(rec):
+            m = s["mention"]
+            if m.upper() in valid_tickers:
+                continue
+            subject_count[m] += 1
+            for t in sp_tickers:
+                co.setdefault(m, Counter())[t] += 1
+    if total_events == 0:
+        return {}
+    alias: dict[str, str] = {}
+    for m, c in co.items():
+        total_m = subject_count[m] or 1
+        best_t, best_lift, best_n = None, 0.0, 0
+        for t, n in c.items():
+            bg = background[t] / total_events
+            if bg <= 0:
+                continue
+            lift = (n / total_m) / bg
+            if lift > best_lift:
+                best_t, best_lift, best_n = t, lift, n
+        if best_t is None or best_n < 5:
+            continue
+        if best_lift < 3.0:
+            continue
+        if best_n / total_m < 0.3:
+            continue
+        alias[m] = best_t
+    return alias
+
+
+def _make_chunk(rec: dict, file_tickers: set[str],
+                alias_map: dict[str, str],
+                valid_tickers: set[str]) -> EventChunk | None:
+    ev_text = (rec.get("event") or "").strip()
+    ts = rec.get("timestamp")
+    if not ev_text or not ts:
+        return None
+    sp = rec.get("source_paths") or []
+    if sp:
+        primary = sp[0]
+    elif file_tickers:
+        primary = f"news_merged/{next(iter(sorted(file_tickers)))}.jsonl"
+    else:
+        primary = ""
+    syms: set[str] = set(file_tickers)
+    for p in sp:
+        parts = str(p).split("/")
+        if len(parts) >= 2 and parts[0] == "news" and parts[1]:
+            syms.add(parts[1])
+    # Merge subject tickers — the fix for events whose 'subject' is a
+    # company that doesn't appear in source_paths (e.g. an article
+    # filed under news/AAPL/ commenting on Meta).
+    for s in _subject_iter(rec):
+        m = s["mention"]
+        m_up = m.upper()
+        if m_up in valid_tickers:
+            syms.add(m_up)
+        else:
+            t = alias_map.get(m)
+            if t and t in valid_tickers:
+                syms.add(t)
+    return EventChunk(
+        event_id=rec.get("event_id", ""),
+        text=ev_text,
+        polarity=rec.get("polarity"),
+        attributed_to=rec.get("attributed_to"),
+        provider=rec.get("provider"),
+        timestamp=str(ts),
+        scope=rec.get("scope"),
+        symbols=tuple(sorted(syms)),
+        source_path=primary,
+        confidence=rec.get("confidence"),
+    )
+
+
 # ---- index ----------------------------------------------------------
 
 
@@ -93,11 +217,19 @@ class NewsIndex:
     def _load_events(self, dir_path: Path) -> None:
         if not dir_path.exists():
             return
-        # Dedup by event_id (same event_id appears in multiple ticker
-        # .jsonl files when an article tags multiple symbols — merge
-        # symbols, keep one row).
-        by_id: dict[str, EventChunk] = {}
-        for fp in sorted(dir_path.glob("*.jsonl")):
+        files = sorted(dir_path.glob("*.jsonl"))
+        if not files:
+            return
+        # Universe of valid tickers = the 50 file stems (news_merged is
+        # partitioned per catalog ticker).
+        valid_tickers: set[str] = {fp.stem for fp in files}
+
+        # First pass: parse + dedup by event_id, accumulate which files
+        # each event_id appeared in (for symbol merge).
+        raw_by_id: dict[str, dict] = {}
+        file_tickers_by_id: dict[str, set[str]] = {}
+        raw_no_id: list[tuple[dict, str]] = []
+        for fp in files:
             file_ticker = fp.stem
             with fp.open(encoding="utf-8") as f:
                 for line in f:
@@ -108,42 +240,31 @@ class NewsIndex:
                         rec = json.loads(line)
                     except (json.JSONDecodeError, ValueError):
                         continue
-                    ev_text = (rec.get("event") or "").strip()
-                    ts = rec.get("timestamp")
-                    if not ev_text or not ts:
-                        continue
-                    sp = rec.get("source_paths") or []
-                    primary = sp[0] if sp else f"news_merged/{file_ticker}.jsonl"
-                    syms = {file_ticker}
-                    for p in sp:
-                        parts = str(p).split("/")
-                        if (len(parts) >= 2
-                                and parts[0] == "news" and parts[1]):
-                            syms.add(parts[1])
                     eid = rec.get("event_id", "")
-                    chunk = EventChunk(
-                        event_id=eid,
-                        text=ev_text,
-                        polarity=rec.get("polarity"),
-                        attributed_to=rec.get("attributed_to"),
-                        provider=rec.get("provider"),
-                        timestamp=str(ts),
-                        scope=rec.get("scope"),
-                        symbols=tuple(sorted(syms)),
-                        source_path=primary,
-                        confidence=rec.get("confidence"),
-                    )
-                    if eid and eid in by_id:
-                        # Merge tickers across cross-file duplicates.
-                        prev = by_id[eid]
-                        merged = tuple(sorted(set(prev.symbols) | set(syms)))
-                        by_id[eid] = EventChunk(**{**prev.__dict__,
-                                                   "symbols": merged})
-                    elif eid:
-                        by_id[eid] = chunk
+                    if eid:
+                        if eid not in raw_by_id:
+                            raw_by_id[eid] = rec
+                            file_tickers_by_id[eid] = {file_ticker}
+                        else:
+                            file_tickers_by_id[eid].add(file_ticker)
                     else:
-                        # no event_id — append directly (rare)
-                        self.events.append(chunk)
+                        raw_no_id.append((rec, file_ticker))
+
+        # Mine mention -> ticker alias map from the deduped records.
+        alias_map = _build_alias_map(raw_by_id.values(), valid_tickers)
+
+        # Second pass: build EventChunks with subject tickers merged
+        # into symbols using valid_tickers + alias_map.
+        by_id: dict[str, EventChunk] = {}
+        for eid, rec in raw_by_id.items():
+            chunk = _make_chunk(rec, file_tickers_by_id[eid],
+                                alias_map, valid_tickers)
+            if chunk is not None:
+                by_id[eid] = chunk
+        for rec, ft in raw_no_id:
+            chunk = _make_chunk(rec, {ft}, alias_map, valid_tickers)
+            if chunk is not None:
+                self.events.append(chunk)
         if by_id:
             self.events = list(by_id.values()) + self.events
 
