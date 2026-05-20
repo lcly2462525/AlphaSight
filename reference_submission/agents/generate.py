@@ -12,7 +12,9 @@ import re
 
 from llm import chat
 from retrieval.numeric import approx_equal, contradicts, parse_numbers
-from agents._util import load_prompt
+from agents._util import load_prompt, parse_json_obj
+
+_CJK_RE = re.compile(r'[一-鿿]')
 
 _EPS_NEAR = re.compile(r"\beps\b", re.IGNORECASE)
 _REV_NEAR = re.compile(r"\b(revenue|sales)\b", re.IGNORECASE)
@@ -169,6 +171,12 @@ class GenerateAgent:
         self.llm = llm_cfg
         self.params = gen_params
         self._prompt = load_prompt("grounded_generate.md")
+        # Chinese topics vs the English corpus: BM25 on Chinese prose
+        # barely matches. Translate the topic into English keyword
+        # phrases (same prompt the review agent uses for claim
+        # translation) for the BM25 query only — the writer LLM still
+        # sees the original topic in `_prompt.format(topic=...)`.
+        self._translate_p = load_prompt("translate_claims.md")
 
     def run(self, topic: str) -> str:
         import sys
@@ -185,8 +193,14 @@ class GenerateAgent:
             _log("no subject resolved; deferring to baseline")
             raise RuntimeError("no subject company resolved")
         _log(f"subject={subject}; retrieving ...")
-        res = self.retriever.search(topic, top_k=12, tickers=subject,
-                                    require_subject=True)
+        # BM25 against the English corpus needs English keywords. For
+        # Chinese topics we append the LLM-translated English projection
+        # (no-op for English-only topics). Fail-open: any translate
+        # failure proceeds with the raw topic.
+        en_kw = self._translate_topic(topic)
+        bm25_query = f"{topic} {en_kw}".strip() if en_kw else topic
+        res = self.retriever.search(bm25_query, top_k=12,
+                                    tickers=subject, require_subject=True)
         _log(f"retrieved {len(res.evidence)} passages "
              f"({time.time() - t0:.1f}s); calling LLM ...")
         subject_block = (
@@ -247,6 +261,37 @@ class GenerateAgent:
         except Exception:
             pass
         return []
+
+    def _translate_topic(self, topic: str) -> str:
+        """Translate a Chinese topic into English keyword phrases for
+        BM25 against the English corpus. Returns empty string for
+        English-only topics or on any failure (fail-open: caller
+        proceeds with the raw topic)."""
+        if not topic or not _CJK_RE.search(topic):
+            return ""
+        import json as _json
+        items = _json.dumps(
+            [{"idx": 0, "zh": topic[:400]}], ensure_ascii=False)
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._translate_p.format(items=items)}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+        except Exception:
+            return ""
+        for entry in (data.get("t") or []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                if int(entry.get("idx", -1)) == 0:
+                    en = entry.get("en")
+                    return str(en).strip() if en else ""
+            except (TypeError, ValueError):
+                continue
+        return ""
 
     def _self_audit(self, subject: list[str], draft: str) -> str:
         # Reuse the review agent's tested per-field / period-aligned
