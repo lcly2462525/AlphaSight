@@ -26,6 +26,7 @@ from llm import chat
 from schemas import ReviewIssue
 from retrieval.numeric import approx_equal, contradicts, parse_numbers
 from retrieval.textutil import tokenize as _toks
+from retrieval.timeparse import TimeIndex
 from agents._util import load_prompt, parse_json_obj
 from agents.anchor import Anchored
 from agents.tables import col, parse_tables
@@ -355,6 +356,10 @@ class ReviewAgent:
                     self._case_bm25 = BM25Okapi(_ct)
             except Exception:
                 self._case_bm25 = None
+        try:
+            self.time_index = TimeIndex.load()
+        except (FileNotFoundError, OSError):
+            self.time_index = TimeIndex.empty()
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -417,6 +422,16 @@ class ReviewAgent:
 
     _MAX_ISSUES = 8          # GT is 0-3/report; over-emission tanks P
     _MAX_NARRATIVE = 4       # narrative path is the false-positive source
+    _PERIOD_END_NEAR_RE = re.compile(
+        r"(?:ending|ended|截至|结束)"
+        r"[^.。\n]{0,60}?"
+        r"("
+        r"20\d{2}-\d{2}-\d{2}|"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep(?:t)?|Oct|Nov|Dec)"
+        r"[a-z]*\.?\s+\d{1,2},?\s+20\d{2}|"
+        r"20\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"
+        r")",
+        re.I)
 
     def run(self, report: str) -> list[ReviewIssue]:
         import sys
@@ -1101,7 +1116,9 @@ class ReviewAgent:
 
     def _date_candidates(self, claims: list[dict],
                          primary: list[str]) -> list[dict]:
+        """Filing-date verifier backed by time_index when available."""
         out: list[dict] = []
+        ti = self.time_index
         for c in claims:
             q = c["quote"]
             form = _claim_form(q)
@@ -1109,59 +1126,96 @@ class ReviewAgent:
             if not form or not dates:
                 continue
             if not re.search(r"filed|submitted|filing date|filed with|"
-                             r"提交|备案|披露日期|提交日", q, re.I):
+                             r"提交|备案|披露日期|提交日|披露", q, re.I):
                 continue
             tickers = self._scope(q, primary)
             if not tickers:
                 continue
             accs = _ACC_RE.findall(q)
             for tk in tickers:
-                recs = self.retriever.fact_store.filings_of(
-                    tk, form=form, accession=accs[0] if accs else None)
-                if not recs:
-                    continue
-                real = sorted({r["date"] for r in recs if r["date"]})
-                if not real or any(d in real for d in dates):
-                    break
-                out.append({
-                    "quote": q, "kind": "date", "tier": "exact",
-                    "evidence": (
+                evidence: str | None = None
+                if ti and accs:
+                    rec = ti.filing_by_accession(tk, accs[0])
+                    if rec and not any(d == rec["date"] for d in dates):
+                        src_line = "; ".join(
+                            f"{k}={v}"
+                            for k, v in sorted(rec["sources"].items()))
+                        evidence = (
+                            f"DETERMINISTIC FACT [SOURCE: time_index] "
+                            f"{tk} {rec['form']} accession {accs[0]} was "
+                            f"filed on {rec['date']} (sources: {src_line}; "
+                            f"consistency={rec['consistency']}). The "
+                            f"claim's date {', '.join(dates)} does not "
+                            f"match.")
+                if evidence is None and ti:
+                    real = ti.filing_dates_of_form(tk, form)
+                    if real and not any(d in real for d in dates):
+                        tail = real[-6:] if len(real) > 6 else real
+                        evidence = (
+                            f"DETERMINISTIC FACT [SOURCE: time_index] "
+                            f"{tk} {form} filings on record were filed on "
+                            f"{', '.join(tail)} (showing {len(tail)} of "
+                            f"{len(real)} dates; sources: filename + "
+                            f"sec_submissions + filings.json). The claim's "
+                            f"date {', '.join(dates)} does not match any "
+                            f"actual {form} filing date for this ticker.")
+                if evidence is None:
+                    recs = self.retriever.fact_store.filings_of(
+                        tk, form=form,
+                        accession=accs[0] if accs else None)
+                    if not recs:
+                        continue
+                    real = sorted({r["date"] for r in recs if r["date"]})
+                    if not real or any(d in real for d in dates):
+                        break
+                    evidence = (
                         f"DETERMINISTIC FACT [SOURCE: catalog] {tk} "
                         f"{form} filings were filed on {', '.join(real)} "
                         f"(accession-encoded). The claim's date "
                         f"{', '.join(dates)} does not match any actual "
-                        f"filing date for this form.")})
+                        f"filing date for this form.")
+                out.append({
+                    "quote": q, "kind": "date", "tier": "exact",
+                    "evidence": evidence})
                 break
         return out
 
     def _period_end_candidates(self, claims: list[dict],
                                primary: list[str]) -> list[dict]:
         out: list[dict] = []
+        ti = self.time_index
+        if not ti:
+            return out
         for c in claims:
             q = c["quote"]
-            if not re.search(r"ended|ending|截至|结束", q, re.I):
+            raws = self._PERIOD_END_NEAR_RE.findall(q)
+            if not raws:
                 continue
-            dates = _parse_dates(q)
-            if not dates:
+            near_dates: list[str] = []
+            for raw in raws:
+                near_dates.extend(_parse_dates(raw))
+            if not near_dates:
                 continue
             year, quarter = _parse_period(q)
             if year is None or quarter is None:
                 continue
             for tk in self._scope(q, primary):
-                rows = self.retriever.fact_store.period_rows(
-                    tk, year=year, quarter=quarter)
-                ends = sorted({r.get("endDate") for r in rows
-                               if r.get("endDate")})
-                if not ends or any(d in ends for d in dates):
+                fp = ti.fiscal_period(tk, year, quarter)
+                if not fp:
+                    continue
+                true_end = fp["end"]
+                if any(d == true_end for d in near_dates):
                     continue
                 out.append({
                     "quote": q,
                     "kind": "date_timeline", "tier": "exact",
                     "evidence": (
-                        f"DETERMINISTIC FACT [SOURCE: research/{tk}/"
-                        f"financials_reported.json] {tk} FY{year} Q{quarter} "
-                        f"period endDate is {', '.join(ends)}. The claim's "
-                        f"date {', '.join(dates)} does not match.")})
+                        f"DETERMINISTIC FACT [SOURCE: {fp['source']}] "
+                        f"{tk} FY{year} Q{quarter} period endDate is "
+                        f"{true_end} (startDate {fp['start']}, form "
+                        f"{fp['form']}). The claim's date "
+                        f"{', '.join(near_dates)} (asserted as the "
+                        f"period end) does not match.")})
                 break
         return out
 

@@ -12,6 +12,7 @@ import re
 
 from llm import chat
 from retrieval.numeric import approx_equal, contradicts, parse_numbers
+from retrieval.finance_kb import FinanceKnowledgeBase
 from agents._util import load_prompt, parse_json_obj
 
 _CJK_RE = re.compile(r'[一-鿿]')
@@ -35,6 +36,28 @@ _SRC_SPAN = re.compile(r"\[SOURCE:[^\]]*\]")
 _BTICK_SPAN = re.compile(r"`[^`]*`")
 _WRAP = re.compile(r"^\s*(?:```[a-zA-Z]*|\"{3}|'{3})\s*\n?|"
                    r"\n?\s*(?:```|\"{3}|'{3})\s*$")
+_FY_Q_RE = re.compile(
+    r"\bFY\s*(20\d{2}|\d{2})\s*Q([1-4])\b|"
+    r"\bFY(20\d{2}|\d{2})Q([1-4])\b|"
+    r"\bQ([1-4])\b",
+    re.IGNORECASE,
+)
+_YTD_CUE = re.compile(
+    r"\b(YTD|year-to-date|cumulative|through)\b|累计", re.IGNORECASE)
+_SINGLE_Q_CUE = re.compile(
+    r"single[- ]quarter|standalone|\balone\b|quarterly|单季|单季度",
+    re.IGNORECASE,
+)
+_SOCIAL_NUMERIC_CUE = re.compile(
+    r"\b(revenue|sales|eps|earnings|net income|guidance|guide|guided|"
+    r"price|return|valuation|multiple|p/e|p/s|fair value|target price|"
+    r"data center|Blackwell)\b",
+    re.IGNORECASE,
+)
+_PRIOR_YEAR_CUE = re.compile(
+    r"prior[- ]year|year[- ]ago|same period last year|去年同期|上年同期",
+    re.IGNORECASE,
+)
 
 
 def _unwrap(text: str) -> str:
@@ -165,12 +188,191 @@ def _qoq_problems(ln: str, series: list[dict]) -> list[str]:
             f'{detail}.']
 
 
+def _prose_without_sources(ln: str) -> str:
+    return _BTICK_SPAN.sub(" ", _SRC_SPAN.sub(" ", ln))
+
+
+def _money_positions(text: str) -> list[tuple[int, float, str]]:
+    out: list[tuple[int, float, str]] = []
+    start = 0
+    for n in parse_numbers(text):
+        if n.is_pct or abs(n.value) < 1e9:
+            continue
+        # Avoid false money from years followed by a word beginning with
+        # t/b/m (e.g. "2026, then" -> 2026 trillion under the permissive
+        # parser). Revenue prose uses decimals or explicit money units.
+        if re.fullmatch(r"\s*20\d{2}\s*,?\s*[kmbt]?\s*", n.raw.lower()):
+            continue
+        if not (re.search(r"[$.]", n.raw)
+                or re.search(r"\b(million|billion|trillion|mn|bn|tn)\b",
+                             n.raw, re.I)):
+            continue
+        pos = text.find(n.raw, start)
+        if pos < 0:
+            pos = text.find(n.raw)
+        if pos < 0:
+            continue
+        out.append((pos, n.value, n.raw))
+        start = pos + len(n.raw)
+    return out
+
+
+def _series_years(series_rows: list[dict]) -> list[int]:
+    return sorted({r.get("year") for r in series_rows
+                   if isinstance(r.get("year"), int)})
+
+
+def _normalize_fy(raw: str | None) -> int | None:
+    if not raw:
+        return None
+    try:
+        y = int(raw)
+    except ValueError:
+        return None
+    return 2000 + y if y < 100 else y
+
+
+def _quarter_mentions(text: str, base_year: int | None) -> list[dict]:
+    out: list[dict] = []
+    for m in _FY_Q_RE.finditer(text):
+        year = _normalize_fy(m.group(1) or m.group(3))
+        qraw = m.group(2) or m.group(4) or m.group(5)
+        try:
+            q = int(qraw)
+        except (TypeError, ValueError):
+            continue
+        out.append({"pos": m.start(), "year": year or base_year, "quarter": q})
+    return out
+
+
+def _row_for(rows: list[dict], year: int | None, quarter: int | None) -> dict | None:
+    if year is None or quarter is None:
+        return None
+    for r in rows:
+        if r.get("year") == year and r.get("quarter") == quarter:
+            return r
+    return None
+
+
+def _period_revenue_problems(ln: str, rows: list[dict]) -> list[str]:
+    """Check prose quarter/YTD revenue amounts against FactStore rows.
+
+    The generic revenue self-audit can be fooled by a correct value inside
+    a citation on the same line. This pass removes citations and compares
+    each prose money amount to the nearest explicit Q label.
+    """
+    prose = _prose_without_sources(ln)
+    if not _REV_NEAR.search(prose):
+        return []
+    years = _series_years(rows)
+    base_year = max(years) if years else None
+    mentions = _quarter_mentions(prose, base_year)
+    if not mentions:
+        return []
+    problems: list[str] = []
+    for pos, claimed, raw in _money_positions(prose):
+        # Prefer labels immediately after the amount ("$35B in Q1"). If
+        # absent, use a nearby preceding label ("Q3 revenue was $57B").
+        after = [m for m in mentions if 0 <= m["pos"] - pos <= 55]
+        before = [m for m in mentions if 0 <= pos - m["pos"] <= 90]
+        after_direct = [m for m in after if m["pos"] - pos <= 40]
+        near = after_direct or (after + before)
+        if not near:
+            continue
+        m = min(near, key=lambda x: abs(x["pos"] - pos))
+        year = m["year"]
+        if year is not None:
+            ctx = prose[max(0, pos - 90): pos + 90]
+            if _PRIOR_YEAR_CUE.search(ctx):
+                year -= 1
+        row = _row_for(rows, year, m["quarter"])
+        if not row:
+            continue
+        ctx = prose[max(0, pos - 90): pos + 90]
+        local = prose[max(0, pos - 60): pos + 70]
+        local_after = prose[pos: pos + 45]
+        if not _REV_NEAR.search(local):
+            continue
+        if re.search(r"\baverage\b", ctx, re.I):
+            continue
+        if re.search(r"data center|segment|Blackwell architecture", ctx, re.I):
+            continue
+        # "through Q2", "YTD revenue", etc. should use cumulative fields.
+        # A distant "single-quarter" elsewhere in the same sentence should
+        # not override a local YTD/through phrase.
+        explicit_through = bool(re.search(
+            r"through\s+Q[1-4]", local_after, re.IGNORECASE))
+        local_cum = bool(
+            explicit_through
+            or re.search(r"\b(YTD|year-to-date|cumulative)\b|累计",
+                         prose[max(0, pos - 45): pos + 20], re.IGNORECASE)
+        )
+        strong_single = bool(
+            not explicit_through
+            and (_SINGLE_Q_CUE.search(local_after) or _SINGLE_Q_CUE.search(local))
+        )
+        use_cum = bool(
+            not strong_single
+            and (local_cum or (_YTD_CUE.search(ctx)
+                               and not _SINGLE_Q_CUE.search(local)))
+        )
+        key = "revenue_cum" if use_cum else "revenue"
+        truth = row.get(key)
+        if not isinstance(truth, (int, float)):
+            continue
+        if contradicts(claimed, truth, rel=0.03):
+            label = "fiscal-YTD cumulative" if use_cum else "single-quarter"
+            problems.append(
+                f'claimed {label} FY{year}Q{m["quarter"]} revenue {raw} '
+                f'but verified {label} revenue is {truth:.0f}')
+    return problems
+
+
+def _revenue_direction_problems(ln: str) -> list[str]:
+    prose = _prose_without_sources(ln)
+    if not (_REV_NEAR.search(prose) and re.search(r"\bdown from\b", prose, re.I)):
+        return []
+    vals = [v for _, v, _ in _money_positions(prose)]
+    if len(vals) >= 2 and vals[0] > vals[1] * 1.02:
+        return [f'claims revenue was "down from" a smaller figure '
+                f'({vals[0]:.0f} vs {vals[1]:.0f}); direction should be up']
+    return []
+
+
+def _ytd_growth_word_problems(ln: str, rows: list[dict]) -> list[str]:
+    prose = _prose_without_sources(ln)
+    if not (re.search(r"triple[- ]digit", prose, re.I)
+            and _REV_NEAR.search(prose) and _YTD_CUE.search(prose)):
+        return []
+    years = _series_years(rows)
+    if not years:
+        return []
+    cur = max((r for r in rows
+               if isinstance(r.get("year"), int)
+               and isinstance(r.get("quarter"), int)
+               and isinstance(r.get("revenue_cum"), (int, float))),
+              key=lambda r: _fiscal_idx(r["year"], r["quarter"]),
+              default=None)
+    if not cur:
+        return []
+    prev = _row_for(rows, cur["year"] - 1, cur["quarter"])
+    if not prev or not isinstance(prev.get("revenue_cum"), (int, float)):
+        return []
+    growth = (cur["revenue_cum"] / prev["revenue_cum"] - 1) * 100
+    if growth < 100:
+        return [f'claims triple-digit YTD revenue growth, but verified '
+                f'FY{cur["year"]}Q{cur["quarter"]} cumulative revenue '
+                f'growth is {growth:+.1f}%']
+    return []
+
+
 class GenerateAgent:
     def __init__(self, retriever, llm_cfg, gen_params: dict) -> None:
         self.retriever = retriever
         self.llm = llm_cfg
         self.params = gen_params
         self._prompt = load_prompt("grounded_generate.md")
+        self._finance_kb = FinanceKnowledgeBase()
         # Chinese topics vs the English corpus: BM25 on Chinese prose
         # barely matches. Translate the topic into English keyword
         # phrases (same prompt the review agent uses for claim
@@ -209,11 +411,16 @@ class GenerateAgent:
             f"FACTS/EVIDENCE; cite a peer's path ONLY inside an explicit, "
             f"labeled comparison and name the peer."
         )
+        facts_block = res.facts or "(none)"
+        evidence_block = res.evidence_block()
+        knowledge_block = self._finance_kb.block_for(
+            "\n".join([topic, en_kw or "", facts_block[:4000]]))
         prompt = self._prompt.format(
             topic=topic,
             subject_block=subject_block,
-            facts_block=res.facts or "(none)",
-            evidence_block=res.evidence_block(),
+            facts_block=facts_block,
+            knowledge_block=knowledge_block or "(none)",
+            evidence_block=evidence_block,
         )
         draft = chat([{"role": "user", "content": prompt}],
                      config=self.llm, **self.params)
@@ -308,9 +515,17 @@ class GenerateAgent:
             ln = line.strip()
             if len(ln) < 8:
                 continue
+            if "social/" in ln and _SOCIAL_NUMERIC_CUE.search(ln):
+                problems.append(
+                    f'- "{ln[:140]}" -> social sources are sentiment-only; '
+                    f'do not cite social/... for financial numbers, guidance, '
+                    f'price/return, valuation, segment revenue, or product '
+                    f'revenue. Replace with verified facts/filings/prices or '
+                    f'delete the unsupported numeric claim.')
             for p in _citation_conflict(ln):
                 problems.append(f'- "{ln[:140]}" -> {p}')
         for tk in subject[:3]:
+            period_rows = fs.period_rows(tk)
             for line in draft.splitlines():
                 ln = line.strip()
                 if len(ln) < 8:
@@ -325,6 +540,12 @@ class GenerateAgent:
                                 f'FY{row.get("year")}Q{row.get("quarter")}'
                                 f': {p}')
                 if _REV_NEAR.search(ln):
+                    for p in _period_revenue_problems(ln, period_rows):
+                        problems.append(f'- "{ln[:140]}" -> {tk} {p}')
+                    for p in _revenue_direction_problems(ln):
+                        problems.append(f'- "{ln[:140]}" -> {tk} {p}')
+                    for p in _ytd_growth_word_problems(ln, period_rows):
+                        problems.append(f'- "{ln[:140]}" -> {tk} {p}')
                     rows = fs.metric(tk, "revenue", year=yr, quarter=q)
                     truths = [r["value"] for r in rows]
                     nums = [n.value for n in parse_numbers(ln)
@@ -347,7 +568,13 @@ class GenerateAgent:
             "(e.g. a QoQ/sequential change stated across non-adjacent "
             "quarters). Rewrite the report correcting ONLY the flagged "
             "figures and their period framing to match the stated "
-            "facts; keep the stance, structure, length and all "
+            "facts. Do NOT invent unstated Q1/Q2/Q3 or YTD revenue values; "
+            "Do NOT use social/... citations for financial numbers, guidance, "
+            "price/return, valuation, segment revenue, or product revenue; "
+            "replace them with verified facts/filings/prices or remove the "
+            "unsupported claim. "
+            "use the verified single-quarter/cumulative facts named in "
+            "PROBLEMS, or say unavailable. Keep the stance, structure, length and all "
             "[SOURCE: ...] citations.\n\n"
             "Output ONLY the corrected report as raw markdown — no "
             "surrounding quotes, code fences, or delimiters, no "

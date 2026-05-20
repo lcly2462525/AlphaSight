@@ -121,7 +121,11 @@ _SELF_DIR = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _SELF_DIR / "prompt_templates"
 
 # Per-kind candidate caps to keep BM25 build bounded on a 100k+ corpus.
-_MAX_CANDIDATES = {"filing": 2000, "news": 5000, "research": 1000, "social": 5000}
+# The ExampleSubmission path is only a last-resort fallback. Keep it
+# conservative: filings are the safest numeric grounding source, while
+# news/social frequently carry cross-ticker narrative or unsourced
+# tweet-level figures.
+_MAX_CANDIDATES = {"filing": 2000, "news": 0, "research": 1000, "social": 0}
 
 
 class ExampleSubmission:
@@ -184,6 +188,9 @@ class ExampleSubmission:
 
         for kind, docs in by_kind.items():
             cap = _MAX_CANDIDATES.get(kind, 500)
+            if cap <= 0:
+                by_kind[kind] = []
+                continue
             if len(docs) > cap:
                 docs.sort(key=lambda x: x.timestamp or "", reverse=True)
                 by_kind[kind] = docs[:cap]

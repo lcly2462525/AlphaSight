@@ -26,9 +26,11 @@ _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 # per-kind candidate caps keep per-request BM25 build bounded. News
 # (and the news_merged event stream) are now served by the dedicated
 # NewsRetriever pipeline — cap set to 0 here so the general BM25 pool
-# is no longer diluted by short event chunks competing against long
-# filing/social windows.
-_CAND_CAP = {"filing": 60, "news": 0, "social": 200, "research": 0}
+# is no longer diluted by short event chunks. Social posts are also
+# excluded from the generate evidence pool: they are useful sentiment
+# hints, but the writer repeatedly treated tweet numbers/guidance as
+# primary financial evidence.
+_CAND_CAP = {"filing": 60, "news": 0, "social": 0, "research": 0}
 _CHUNK_BUDGET = 1200
 _TOTAL_BUDGET = 12000
 

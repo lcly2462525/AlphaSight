@@ -1,0 +1,55 @@
+===== TOPIC =====
+NVDA FY2026 Q3 EPS surprise and beat/miss direction, de-cumulated single-quarter revenue versus YTD revenue, and 2025 price return.
+
+===== ENABLED_KB_BLOCK =====
+Use these notes only as financial calculation/basis guards; they are NOT corpus evidence and must NOT be cited.
+Knowledge source: skill_fact-store-quality.md, finance_knowledge_skill.md
+- EPS consensus basis: 1. earnings.json is an EPS consensus table, not SEC GAAP truth. Its safest fields are surprise, surprisePercent, and beat/miss direction. For scale-suspect EPS, do not emit exact absolute EPS errors. Use scale-invariant checks: beat/miss, surprise sign, surprise percent, and direction.
+- EPS scale safeguards: Use SEC-implied EPS only as a sanity check: Mark scale_suspect=true only when the same ticker shows a stable 10^n factor across multiple adjacent quarters. Do not flag one-off cross-basis differences; ABBV/META-style GAAP vs non-GAAP gaps are expected.
+- SEC GAAP and YTD periods: 2. financials_reported.json is SEC/GAAP. Income-statement and cash-flow metrics may be fiscal-YTD; de-cumulate only within the same fiscal year and same cumulative start.
+- Price and return anchors: 3. prices/*.csv is the anchor for price/return claims.
+
+===== PROMPT_SIZE =====
+without_kb_chars=10078
+with_kb_chars=11126
+delta=1048
+
+[call] without KB
+Traceback (most recent call last):
+  File "/inspire/qb-ilm2/project/26summer-camp-03/26210833/Summer-Camp-Projects-copy/reference_submission/tools/validate_finance_kb_ab.py", line 131, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/inspire/qb-ilm2/project/26summer-camp-03/26210833/Summer-Camp-Projects-copy/reference_submission/tools/validate_finance_kb_ab.py", line 104, in main
+    without = chat(
+              ^^^^^
+  File "/inspire/qb-ilm2/project/26summer-camp-03/26210833/Summer-Camp-Projects-copy/reference_submission/llm.py", line 167, in chat
+    resp = _create_with_retry(client, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/inspire/qb-ilm2/project/26summer-camp-03/26210833/Summer-Camp-Projects-copy/reference_submission/llm.py", line 186, in _create_with_retry
+    return client.chat.completions.create(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/openai/_utils/_utils.py", line 286, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/openai/resources/chat/completions/completions.py", line 1192, in create
+    return self._post(
+           ^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/openai/_base_client.py", line 1294, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/openai/_base_client.py", line 988, in request
+    request = self._build_request(options, retries_taken=retries_taken)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/openai/_base_client.py", line 509, in _build_request
+    headers = self._build_headers(options, retries_taken=retries_taken)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/openai/_base_client.py", line 442, in _build_headers
+    headers = httpx.Headers(headers_dict)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/httpx/_models.py", line 156, in __init__
+    bytes_value = _normalize_header_value(v, encoding)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/httpx/_models.py", line 82, in _normalize_header_value
+    return value.encode(encoding or "ascii")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'ascii' codec can't encode characters in position 7-8: ordinal not in range(128)
