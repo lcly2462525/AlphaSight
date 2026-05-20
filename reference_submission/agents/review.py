@@ -38,25 +38,22 @@ from agents.tables import col, parse_tables
 # closest to the section being judged are useful. Split them out at
 # init, BM25-index the cases, and serve top-K per call.
 # Case bullets follow the convention `- **<subject>** — <body>`
-# (bold subject as the discriminator). FP-guard / quote-discipline /
-# template bullets in the rubric start with plain text after the dash.
+# (bold subject + em-dash). Other rubric bullets (FP guards / quote
+# discipline) use plain text after the dash, so the bold-subject
+# pattern is a sufficient discriminator — no section-header check
+# required, and the parser stays robust to renaming the taxonomy
+# section.
 _CASE_LINE_RE = re.compile(r'^\s*-\s+\*\*[^*]+\*\*\s+—')
-_H2_RE = re.compile(r'^##\s')
 
 
 def _split_rubric_cases(text: str) -> tuple[str, list[str]]:
-    """Return (core_block, cases). `core` keeps every line EXCEPT the
-    case-bullet lines inside the `## 7 error classes` section; `cases`
-    is the list of those bullet lines (one per worked example)."""
+    """Return (core_block, cases). Cases are bullet lines whose body
+    starts with bold text followed by an em-dash; everything else
+    (intro / scope / FP guards / templates) stays in core."""
     cases: list[str] = []
     kept: list[str] = []
-    in_classes = False
     for line in text.splitlines():
-        if _H2_RE.match(line):
-            in_classes = "error classes" in line.lower()
-            kept.append(line)
-            continue
-        if in_classes and _CASE_LINE_RE.match(line):
+        if _CASE_LINE_RE.match(line):
             cases.append(line.strip())
         else:
             kept.append(line)
