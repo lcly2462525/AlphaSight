@@ -327,6 +327,7 @@ class ReviewAgent:
         self._veto_p = load_prompt("verify_exact.md")
         self._grounded_p = load_prompt("grounded_review.md")
         self._filter_p = load_prompt("filter_candidates.md")
+        self._news_p = load_prompt("news_grounded_check.md")
         self._translate_p = load_prompt("translate_claims.md")
         # Skill-derived audit rubric (7 error classes + FP guards +
         # reason templates + worked examples). Injected at judgment
@@ -472,15 +473,27 @@ class ReviewAgent:
         #    compare — language-agnostic, contradiction-only, grounded
         #    on exact facts so it cannot hallucinate truth.
         facts = self._facts_block(primary)
-        evidence, news_evidence = self._evidence_pool(primary, claims)
+        evidence = self._evidence_pool(primary, claims)
         sections = self._split_sections(anc.raw)
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
-             f"grounded check over {len(sections)} sections "
-             f"(general + news evidence pools) ...")
-        grounded = self._filter_candidates(
-            self._grounded_check(evidence, facts, sections,
-                                 news_evidence=news_evidence),
-            facts)
+             f"general check over {len(sections)} sections + "
+             f"per-claim news check ...")
+        # Two independent passes:
+        #   * general — per section, FactStore + filings/research/social
+        #   * news    — per news-anchored claim, NewsRetriever evidence
+        # Union then dedup by quote, hand the merged list to the
+        # batch LLM filter for one precision gate.
+        cands_general = self._grounded_check(evidence, facts, sections)
+        cands_news = self._news_grounded_check(claims, primary)
+        seen_q: set[str] = set()
+        merged_cands: list[tuple[str, str]] = []
+        for q, r in cands_general + cands_news:
+            if q and q not in seen_q:
+                merged_cands.append((q, r))
+                seen_q.add(q)
+        _log(f"general={len(cands_general)} + news={len(cands_news)} "
+             f"-> merged {len(merged_cands)} candidates -> filter ...")
+        grounded = self._filter_candidates(merged_cands, facts)
         for q, r in grounded:
             if len(issues) >= self._MAX_ISSUES:
                 break
@@ -625,22 +638,12 @@ class ReviewAgent:
                 "(retrieved per this section)\n"
                 + "\n".join(sel))
 
-    def _evidence_pool(
-            self, primary: list[str],
-            claims: list[dict]) -> tuple[str, str]:
-        """Two parallel retrieval pipelines feeding two prompt sections.
-
-        Returns (general_evidence_block, news_evidence_block):
-          * general — HybridRetriever output (filings / research /
-            social), one strong generate-style retrieval reused across
-            every section.
-          * news    — NewsRetriever output (atomic events from
-            news_merged + paired body excerpts), aggregated per-claim
-            so the discriminative fields (polarity / attributed_to /
-            timestamp) reach the LLM. Empty string when news pipeline
-            is unavailable.
-        """
-        # ---- general (HybridRetriever) ----
+    def _evidence_pool(self, primary: list[str],
+                       claims: list[dict]) -> str:
+        """One generate-style HybridRetriever pass reused across every
+        section. Returns ONLY the general evidence block (filings /
+        research / social). News evidence is retrieved separately,
+        per-claim, inside `_news_grounded_check`."""
         try:
             parts: list[str] = list(primary or [])
             for c in claims[:24]:
@@ -651,14 +654,10 @@ class ReviewAgent:
             q = " ".join(parts)
             res = self.retriever.search(
                 q[:4000], top_k=14, tickers=primary or None)
-            general_ev = res.evidence_block()
-            general_block = (general_ev[:7000] if general_ev
-                             else "(no passages retrieved)")
+            ev = res.evidence_block()
+            return ev[:7000] if ev else "(no passages retrieved)"
         except Exception:
-            general_block = "(no passages retrieved)"
-        # ---- news (NewsRetriever, per-claim aggregation) ----
-        news_block = self._news_evidence_block(primary, claims)
-        return general_block, news_block
+            return "(no passages retrieved)"
 
     def _news_evidence_block(
             self, primary: list[str], claims: list[dict]) -> str:
@@ -737,8 +736,10 @@ class ReviewAgent:
         )
 
     def _grounded_check(self, evidence: str, facts: str,
-                        sections: list[str],
-                        news_evidence: str = "") -> list[tuple[str, str]]:
+                        sections: list[str]) -> list[tuple[str, str]]:
+        """General pass — sees only FactStore (`facts`) and the
+        HybridRetriever's filings/research/social `evidence`. News is
+        out of scope here; the per-claim news pass handles that."""
         out: list[tuple[str, str]] = []
         seen: set[str] = set()
         for sec in sections:
@@ -748,8 +749,80 @@ class ReviewAgent:
                       "content": self._grounded_p.format(
                           rubric=self._rubric_for(sec[:4000]),
                           facts=facts[:4000], evidence=evidence,
-                          news_evidence=news_evidence,
                           section=sec[:4000])}],
+                    config=self.llm,
+                    **{**self.params,
+                       "response_format": {"type": "json_object"}})
+                data = parse_json_obj(raw)
+            except Exception:
+                continue
+            for it in (data.get("issues", [])
+                       if isinstance(data, dict) else []):
+                if not isinstance(it, dict):
+                    continue
+                q = str(it.get("quote", "")).strip()
+                r = str(it.get("reason", "")).strip()
+                if q and r and q not in seen:
+                    out.append((q, r))
+                    seen.add(q)
+        return out
+
+    def _news_grounded_check(
+            self, claims: list[dict],
+            primary: list[str]) -> list[tuple[str, str]]:
+        """News pass — per-claim LLM judgment over the news pipeline.
+        For each news-anchored claim (has outlet / polarity / date /
+        narrative-number cue), retrieve top-K events via NewsRetriever
+        and ask a focused LLM call whether news evidence concretely
+        contradicts the claim. Returns (quote, reason) tuples.
+
+        Per-claim is more expensive than batch but lets each LLM call
+        see only the events most relevant to its specific claim, which
+        is what the per-claim NewsQuery already gives us."""
+        if self._news_retriever is None or not claims:
+            return []
+        from retrieval.news import format_news_evidence_block
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for c in claims[:24]:
+            quote = c.get("quote", "") or ""
+            if not quote or quote in seen:
+                continue
+            # heuristic: only run news pass on news-anchored claims —
+            # claims with an outlet cue, a polarity/action verb, an
+            # explicit date, or a narrative numeric pattern.
+            if not (_SOURCE_CUE.search(quote)
+                    or _DIR_UP.search(quote)
+                    or _DIR_DOWN.search(quote)
+                    or _DATE_ISO.search(quote)
+                    or _DATE_MDY.search(quote)
+                    or _DATE_CN.search(quote)
+                    or re.search(r'\b\d{3,}(?:,\d{3})*\b', quote)
+                    or re.search(r'\$[\d.,]+(?:\s*[BMK])?', quote)):
+                continue
+            # build a focused NewsQuery for this claim
+            try:
+                nq = self._build_news_query(c, primary)
+            except Exception:
+                continue
+            if not nq.text and not nq.numeric_hints and not nq.outlet_hint:
+                continue
+            try:
+                evs = self._news_retriever.search(nq, top_k=4)
+            except Exception:
+                continue
+            if not evs:
+                continue
+            news_block = format_news_evidence_block(evs, max_chars=3500)
+            if not news_block or "(no news evidence)" in news_block:
+                continue
+            try:
+                raw = chat(
+                    [{"role": "user",
+                      "content": self._news_p.format(
+                          rubric=self._rubric_for(quote),
+                          news_evidence=news_block,
+                          quote=quote[:1200])}],
                     config=self.llm,
                     **{**self.params,
                        "response_format": {"type": "json_object"}})
