@@ -90,8 +90,83 @@ _WEAK_FRAGMENT = re.compile(
     re.I)
 _SOURCE_CUE = re.compile(
     r"Bloomberg|CNBC|Reuters|Benzinga|Wall Street Journal|WSJ|"
-    r"Fierce Pharma|SEC|Form\s+[0-9A-Z-]+|8-K|10-K|10-Q|披露|报道",
+    r"Fierce Pharma|Financial Times|\bFT\b|Barron'?s|MarketWatch|"
+    r"Forbes|Seeking Alpha|Yahoo|Investing\.com|GlobeNewswire|"
+    r"PR Newswire|BusinessWire|Motley Fool|The Information|"
+    r"NHTSA|FDA|FTC|DOJ|"
+    r"SEC|Form\s+[0-9A-Z-]+|8-K|10-K|10-Q|"
+    r"披露|报道|路透|彭博|华尔街日报|金融时报|财联社|第一财经|"
+    r"每日经济新闻|36氪|新华社|央视|界面新闻",
     re.I)
+# Polarity / action verbs that flip narrative direction — extracting
+# them into the BM25 query lets short event chunks (e.g. JPM
+# downgraded NKE) actually compete on the right discriminator.
+_POLARITY_RE = re.compile(
+    r"\b(?:upgrade[ds]?|downgrade[ds]?|raise[ds]?|lower[ds]?|cut|"
+    r"slash(?:ed)?|boost(?:ed)?|hike[ds]?|trim(?:med)?|reiterat(?:ed|es)|"
+    r"initiat(?:ed|es)|beat|miss(?:ed|es)?|surpass(?:ed)?|recall(?:ed|s)?|"
+    r"announc(?:ed|es)|launch(?:ed|es)?|approve[ds]?|reject(?:ed|s)?|"
+    r"acquire[ds]?|merge[ds]?|divest(?:ed|s)?|"
+    r"bullish|bearish|outperform|underperform|overweight|neutral|"
+    r"上调|下调|调升|调降|上修|下修|增持|减持|超预期|不及预期|"
+    r"召回|发布|公告|收购|合并|裁员|停产|批准|拒绝|否决)\b", re.I)
+# --- final-filter deterministic guards ------------------------------
+# Self-negation: model conceded uncertainty in its own reason yet still
+# emitted the issue. Patterns are unambiguous "I cannot judge" — TPs
+# never end in these phrases (they cite a specific contradicting value).
+_SELF_NEG_RE = re.compile(
+    r"no\s+(?:valid\s+|direct\s+)?(?:numeric\s+)?contradiction(?:\s+(?:can\s+be|exists|is|"
+    r"has\s+been))?(?:\s+(?:established|confirmed|flagged|found|raised))?|"
+    r"cannot\s+be\s+(?:flagged|confirmed|verified|established|disproven|substantiated)|"
+    r"is\s+not\s+(?:flagged|a\s+contradiction|a\s+valid\s+issue)|"
+    r"(?:this|it)\s+(?:is|cannot|does)\s+not\s+(?:a\s+)?"
+    r"(?:contradict(?:ion|ed?)?|valid\s+issue|flagged|be\s+flagged)|"
+    r"absence\s+of\s+(?:support|evidence|contradiction)\s+is\s+not\s+"
+    r"(?:a\s+)?contradiction|"
+    r"no\s+flag\s+is\s+raised|"
+    r"(?:therefore|hence|thus)[,]?\s+(?:no\s+(?:valid\s+|direct\s+)?"
+    r"(?:contradiction|issue|error)|this\s+is\s+not\s+(?:a\s+)?"
+    r"(?:contradiction|issue|valid\s+issue))|"
+    r"statement\s+is\s+supported|"
+    r"(?:claim|statement|value|figure)\s+(?:itself\s+)?is\s+(?:actually\s+)?correct|"
+    r"hard\s+rule:\s*only\s+flag",
+    re.I)
+# Chinese 亿 vs English billion: "X 亿美元" = X×100M USD = (X/10) billion.
+# When a candidate's reason claims a 10x / order-of-magnitude error and
+# the quote is in 亿, the bug is the reviewer's unit reading, not the
+# report. (Only fires on 亿 quotes — real 10x errors in English text
+# stay flagged.)
+_TEN_X_RE = re.compile(
+    # "off / overstates X / inflates X / incorrectly states X / etc.
+    # ... by (a) factor of 10 / ten" — allow up to ~6 words between
+    # verb and "by ... factor", catching "overstates the amount by a
+    # factor of 10" and similar.
+    r"(?:off|(?:over|under)stat\w*|inflat\w*|exaggerat\w*|"
+    r"incorrectly\s+(?:inflat\w*|stat\w*|round\w*|report\w*))"
+    r"(?:\s+\w+){0,6}\s+by\s+(?:a[n]?\s+)?(?:factor\s+of\s+(?:10|ten)|"
+    r"order\s+of\s+magnitude)|"
+    r"order\s+of\s+magnitude|"
+    r"\b(?:10\s*x|ten\s*times)\b|"
+    # "[reported in] billions ... not millions" (or reverse) — Chinese
+    # 亿 quotes mis-glossed as the wrong English magnitude.
+    r"in\s+billions?\s+of\s+dollars,?\s+not\s+millions?|"
+    r"in\s+millions?\s+of\s+dollars,?\s+not\s+billions?|"
+    r"million\s+USD,?\s+but\s+the\s+correct\s+figure\s+is\s+[^.]*billion|"
+    r"billion\s+USD,?\s+but\s+the\s+correct\s+figure\s+is\s+[^.]*million|"
+    r"数量级|十倍|放大\s*10\s*倍",
+    re.I)
+_YI_IN_QUOTE = re.compile(r"\d+(?:[.,]\d+)?\s*亿")
+
+
+def _reason_self_negates(reason: str) -> bool:
+    return bool(_SELF_NEG_RE.search(reason or ""))
+
+
+def _yi_magnitude_misread(quote: str, reason: str) -> bool:
+    """Drop reviewer's '10x error' verdict when the quote uses Chinese
+    亿 (= 100M, so X 亿美元 is (X/10) billion, not X billion)."""
+    return bool(_YI_IN_QUOTE.search(quote or "")
+                and _TEN_X_RE.search(reason or ""))
 _PEER_CUE = re.compile(r"peer|peers\.json|basket|同业|可比公司", re.I)
 _PRICE_CUE = re.compile(
     r"opened|closed|close-to-close|52-week|price gain|price decline|"
@@ -130,10 +205,14 @@ _CJK_RE = re.compile(r'[一-鿿]')
 
 def _claim_signal(quote: str) -> str:
     """Extract high-signal tokens (numbers, dates, periods, tickers)
-    for a focused BM25 query — strips prose filler that dilutes IDF."""
+    for a focused BM25 query — strips prose filler that dilutes IDF.
+    Also pulls narrative discriminators (polarity / action verbs) so
+    short event-stream chunks (e.g. 'JPM downgraded NKE') actually
+    surface on the relevant claim, not just on shared numbers."""
     toks = [t for t in _SIGNAL_RE.findall(quote)
             if t not in _SIGNAL_STOP]
-    return " ".join(toks[:30])
+    verbs = _POLARITY_RE.findall(quote)
+    return " ".join((toks + verbs)[:36])
 
 
 # ---- filing-date verification helpers ------------------------------
@@ -277,6 +356,7 @@ class ReviewAgent:
         self._adj_p = load_prompt("adjudicate.md")
         self._veto_p = load_prompt("verify_exact.md")
         self._grounded_p = load_prompt("grounded_review.md")
+        self._news_p = load_prompt("news_grounded_check.md")
         self._filter_p = load_prompt("filter_candidates.md")
         self._translate_p = load_prompt("translate_claims.md")
 
@@ -398,8 +478,22 @@ class ReviewAgent:
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
              f"grounded check over {len(sections)} sections "
              f"(shared evidence pool) ...")
-        grounded = self._filter_candidates(
-            self._grounded_check(evidence, facts, sections), facts)
+        # Two parallel candidate streams, then ONE union before the
+        # filter:
+        # - _grounded_check: generic per-section pass (broad coverage)
+        # - _news_grounded_check: dedicated news-anchored pass with the
+        #   SKILL.md four-class taxonomy + train_gt few-shot. Targets
+        #   the narrative class where _grounded_check has historically
+        #   missed (sign inversion / source misattribution / specific
+        #   narrative numbers and dates).
+        seen_q: set[str] = set()
+        merged: list[tuple[str, str]] = []
+        for q, r in (self._grounded_check(evidence, facts, sections)
+                     + self._news_grounded_check(claims, evidence)):
+            if q and q not in seen_q:
+                merged.append((q, r))
+                seen_q.add(q)
+        grounded = self._filter_candidates(merged, facts)
         for q, r in grounded:
             if len(issues) >= self._MAX_ISSUES:
                 break
@@ -558,6 +652,47 @@ class ReviewAgent:
                     seen.add(q)
         return out
 
+    def _news_grounded_check(
+            self, claims: list[dict],
+            evidence: str) -> list[tuple[str, str]]:
+        """Dedicated news-anchored pass: ONE LLM call over the whole
+        claim list with a prompt anchored on the SKILL.md four-class
+        taxonomy (number/date/sign/source) and train_gt few-shot. The
+        prompt itself instructs the model to skip non-news-anchored
+        and ambiguous claims, so all claims are sent in; the model
+        filters. Fail-open."""
+        if not claims:
+            return []
+        import json as _json
+        quotes = [c["quote"] for c in claims[:24]
+                  if c.get("quote")]
+        if not quotes:
+            return []
+        try:
+            raw = chat(
+                [{"role": "user",
+                  "content": self._news_p.format(
+                      evidence=evidence,
+                      claims=_json.dumps(quotes, ensure_ascii=False))}],
+                config=self.llm,
+                **{**self.params,
+                   "response_format": {"type": "json_object"}})
+            data = parse_json_obj(raw)
+        except Exception:
+            return []
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for it in (data.get("issues", [])
+                   if isinstance(data, dict) else []):
+            if not isinstance(it, dict):
+                continue
+            q = str(it.get("quote", "")).strip()
+            r = str(it.get("reason", "")).strip()
+            if q and r and q not in seen:
+                out.append((q, r))
+                seen.add(q)
+        return out
+
     def _filter_candidates(
             self, cands: list[tuple[str, str]],
             facts: str) -> list[tuple[str, str]]:
@@ -567,6 +702,17 @@ class ReviewAgent:
         ("matches X but Y is wrong") are no longer mis-dropped.
         Passage-grounded source/timeline issues are exempted via the
         prompt. Fail-open — exception or drop-all keeps everything."""
+        if not cands:
+            return cands
+        # Deterministic prefilters — drop candidates the model already
+        # conceded ("no contradiction / cannot be flagged") and Chinese
+        # 亿-vs-billion 10x misreads. Both are unambiguous bug patterns
+        # that the LLM filter can't reliably catch (the prompt tells it
+        # to ignore reason wording, which is correct for genuine mixed
+        # reasons but lets self-cancels through).
+        cands = [c for c in cands
+                 if not _reason_self_negates(c[1])
+                 and not _yi_magnitude_misread(c[0], c[1])]
         if not cands:
             return cands
         import json as _json

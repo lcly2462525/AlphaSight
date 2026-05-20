@@ -21,9 +21,27 @@ Hard rules:
 - VERIFIED FACTS outrank the report. If the report's number/date/
   direction disagrees with a VERIFIED FACT, the report is wrong.
 - If nothing given clearly contradicts a statement, do NOT flag it.
-  Absence of support is not contradiction. When unsure, skip.
+  Absence of support is not contradiction. When unsure, skip. **If your
+  reason ends with "no contradiction", "cannot be flagged", "no source
+  supports", "this is not a contradiction", or any similar concession,
+  do NOT include the item — return only items you can fully back.**
 - Opinions, forecasts, valuations, and soft narrative are never issues.
 - You must be able to point to the exact fact/passage that conflicts.
+
+Narrative discriminators — SOURCE PASSAGES include `[EVENT date | polarity | src: attributed_to | via provider]` event lines.
+- **Polarity** (`bullish`/`bearish`) flags sign-inversion errors
+  (e.g. report says "JPM downgraded NKE" but event says `bullish` +
+  source language is "upgraded").
+- **`src: <attributed_to>`** is the authoritative outlet/firm —
+  use it to catch source-misattribution errors (Bloomberg vs CNBC,
+  WSJ vs Fierce Pharma).
+- **`[EVENT <YYYY-MM-DD>]`** is the event date — use it to catch
+  date-tampering errors.
+
+Chinese units: `X 亿美元` = X × 100M USD = (X/10) billion USD.
+`万亿` = trillion. Do NOT flag a figure like `$11.30 亿美元` as a 10x
+overstatement of `$11.30B` — they are different units, the report is
+correct on magnitude (it equals $1.13B).
 
 # VERIFIED FACTS
 {facts}
