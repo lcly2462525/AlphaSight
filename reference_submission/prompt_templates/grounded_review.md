@@ -54,15 +54,6 @@ Hard rules:
 # OUTPUT
 Return JSON only:
 {{"issues": [{{"quote": "<verbatim substring of the REPORT SECTION, copied EXACTLY incl. markdown/newlines>", "reason": "<what is wrong + the correct value, citing the specific VERIFIED FACT or passage that contradicts it>"}}]}}
-- `quote` MUST be an exact substring of the REPORT SECTION. Prefer the
-  SHORTEST verbatim substring that uniquely identifies the tampered
-  atom — a single short clause or sentence containing the wrong
-  value with its named subject. **Reference-set quotes are typically
-  20–80 characters (median ≈ 40–50)**; substrings longer than ≈ 150
-  characters match the reference less reliably. Do NOT include the
-  full bullet decoration (`-`, leading `**`, surrounding list
-  markers) or full table-row pipes if a tighter clause within the
-  bullet/row carries the wrong atom on its own. Do NOT include the
-  bare number/date alone, and do NOT include surrounding correct
-  context that dilutes the match.
+- `quote` MUST be an exact substring of the REPORT SECTION (a full
+  sentence, bullet, or table row — not a bare number/date fragment).
 - Return {{"issues": []}} if nothing in this section is contradicted.

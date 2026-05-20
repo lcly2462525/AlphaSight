@@ -186,10 +186,8 @@ look superficially like a tamper but are not.
 ## 5. Quote Discipline
 
 - The quote must be a verbatim substring of the report, preserving markdown and newline characters.
-- **Prefer the shortest substring that still identifies the tampered atom unambiguously.** Measured on the training ground truth and validation reference, quotes are typically **20–80 characters** (median ≈ 40–50). Substrings much longer than that (entire bullets with their `-`/`**`/decoration, entire table rows with all their pipes, multi-sentence paragraphs) match the reference scoring less reliably.
-- When the wrong atom lives inside a markdown bullet or table row, quote the inner sentence/clause that names the subject and the wrong value, not the wrapping `- ` or `|` decoration.
-- Do not quote a bare number, date, or ticker on its own — the quote must include the subject and the wrong value together.
-- Do not quote the correct sister sentence when an error exists elsewhere; flag the wrong one only.
+- The quote should be the single sentence, bullet, or table row containing the tampered atom — not a paragraph of surrounding context.
+- The quote should not be the correct sister sentence when an error exists elsewhere; flag the wrong one only.
 
 ## 6. Reason Templates
 
