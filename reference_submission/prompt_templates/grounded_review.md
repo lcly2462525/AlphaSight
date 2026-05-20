@@ -21,12 +21,20 @@ Hard rules:
 - VERIFIED FACTS outrank the report. If the report's number/date/
   direction disagrees with a VERIFIED FACT, the report is wrong.
 - If nothing given clearly contradicts a statement, do NOT flag it.
-  Absence of support is not contradiction. When unsure, skip.
+  Absence of support is not contradiction.
 - Opinions, forecasts, valuations, and soft narrative are never issues.
 - You must be able to point to the exact fact/passage that conflicts.
-- **Use the AUDIT RUBRIC below**: classify each issue into one of the 7
-  error classes, respect the FP guards, write the reason using the
-  matching template.
+- **When a VERIFIED FACT or SOURCE PASSAGE gives a DIFFERENT DEFINITE
+  value / date / direction / outlet for the SAME named subject, FLAG
+  IT** — do not withhold a real contradiction because it doesn't
+  match a worked example exactly. Fail toward FLAG when corpus is
+  concrete.
+- The AUDIT RUBRIC below is a calibrated reference (7 classes,
+  worked examples, FP guards, reason templates). Treat it as
+  guidance — pattern-match issues to the closest class, copy a
+  reason template, and use the FP guards to avoid the listed
+  precision traps. It is NOT a closed checklist; novel-shape
+  contradictions still count when corpus disagrees with report.
 
 # AUDIT RUBRIC
 {rubric}
