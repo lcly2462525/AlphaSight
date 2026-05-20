@@ -306,6 +306,22 @@ class ReviewAgent:
         self.retriever = retriever
         self.llm = llm_cfg
         self.params = rev_params
+        # News pipeline runs in parallel to the general HybridRetriever.
+        # NewsRetriever owns its own BM25 over news_merged events plus
+        # lazy body-excerpt loading. Fail-open: if news data is absent
+        # (e.g. corpus dir broken), self._news_retriever stays None and
+        # the news evidence block is empty downstream.
+        self._news_retriever = None
+        try:
+            from retrieval.news import NewsRetriever
+            corpus = getattr(retriever, "corpus", None)
+            if corpus is not None:
+                news_dir = corpus / "news_merged"
+                if news_dir.exists():
+                    self._news_retriever = NewsRetriever(
+                        news_merged_dir=news_dir, corpus_dir=corpus)
+        except Exception:
+            self._news_retriever = None
         self._extract_p = load_prompt("extract_claims.md")
         self._adj_p = load_prompt("adjudicate.md")
         self._veto_p = load_prompt("verify_exact.md")
@@ -456,13 +472,15 @@ class ReviewAgent:
         #    compare — language-agnostic, contradiction-only, grounded
         #    on exact facts so it cannot hallucinate truth.
         facts = self._facts_block(primary)
-        evidence = self._evidence_pool(primary, claims)
+        evidence, news_evidence = self._evidence_pool(primary, claims)
         sections = self._split_sections(anc.raw)
         _log(f"{len(claims)} claims, {len(exact)} det-exact emitted; "
              f"grounded check over {len(sections)} sections "
-             f"(shared evidence pool) ...")
+             f"(general + news evidence pools) ...")
         grounded = self._filter_candidates(
-            self._grounded_check(evidence, facts, sections), facts)
+            self._grounded_check(evidence, facts, sections,
+                                 news_evidence=news_evidence),
+            facts)
         for q, r in grounded:
             if len(issues) >= self._MAX_ISSUES:
                 break
@@ -607,17 +625,23 @@ class ReviewAgent:
                 "(retrieved per this section)\n"
                 + "\n".join(sel))
 
-    def _evidence_pool(self, primary: list[str],
-                       claims: list[dict]) -> str:
-        """ONE strong generate-style retrieval, reused across every
-        section. Per-section `sec[:1200]` queries were Chinese prose vs
-        English filings (weak BM25, fragmented). The query here is the
-        subject + the extracted claims — claims carry the specific
-        numbers/dates/English entities that actually hit source text."""
+    def _evidence_pool(
+            self, primary: list[str],
+            claims: list[dict]) -> tuple[str, str]:
+        """Two parallel retrieval pipelines feeding two prompt sections.
+
+        Returns (general_evidence_block, news_evidence_block):
+          * general — HybridRetriever output (filings / research /
+            social), one strong generate-style retrieval reused across
+            every section.
+          * news    — NewsRetriever output (atomic events from
+            news_merged + paired body excerpts), aggregated per-claim
+            so the discriminative fields (polarity / attributed_to /
+            timestamp) reach the LLM. Empty string when news pipeline
+            is unavailable.
+        """
+        # ---- general (HybridRetriever) ----
         try:
-            # Mix the raw quote (carries English ticker / source-outlet
-            # names) with q_en (LLM-translated English keywords for the
-            # Chinese ones) so BM25 has the most discriminative tokens.
             parts: list[str] = list(primary or [])
             for c in claims[:24]:
                 parts.append(c["quote"])
@@ -627,13 +651,94 @@ class ReviewAgent:
             q = " ".join(parts)
             res = self.retriever.search(
                 q[:4000], top_k=14, tickers=primary or None)
-            ev = res.evidence_block()
-            return ev[:7000] if ev else "(no passages retrieved)"
+            general_ev = res.evidence_block()
+            general_block = (general_ev[:7000] if general_ev
+                             else "(no passages retrieved)")
         except Exception:
-            return "(no passages retrieved)"
+            general_block = "(no passages retrieved)"
+        # ---- news (NewsRetriever, per-claim aggregation) ----
+        news_block = self._news_evidence_block(primary, claims)
+        return general_block, news_block
+
+    def _news_evidence_block(
+            self, primary: list[str], claims: list[dict]) -> str:
+        """Run NewsRetriever per claim, dedup by event_id, format."""
+        if self._news_retriever is None:
+            return "(news pipeline unavailable)"
+        from retrieval.news import format_news_evidence_block
+        seen_events: dict[str, "NewsEvidence"] = {}  # noqa: F821
+        for c in claims[:24]:
+            try:
+                nq = self._build_news_query(c, primary)
+            except Exception:
+                continue
+            if not nq.text and not nq.numeric_hints and not nq.outlet_hint:
+                continue  # nothing distinctive to search on
+            try:
+                results = self._news_retriever.search(nq, top_k=4)
+            except Exception:
+                continue
+            for ev in results:
+                key = (ev.timestamp[:10] + "|" + ev.event[:80])
+                if key not in seen_events or ev.score > seen_events[key].score:
+                    seen_events[key] = ev
+        merged = sorted(seen_events.values(),
+                        key=lambda e: -e.score)[:15]
+        return format_news_evidence_block(merged, max_chars=5000)
+
+    def _build_news_query(self, claim: dict,
+                          primary: list[str]) -> "NewsQuery":  # noqa: F821
+        """Map an extracted claim to a structured NewsQuery. Every
+        field is optional; an empty NewsQuery returns no results."""
+        from retrieval.news import NewsQuery
+        quote = claim.get("quote", "")
+        q_en = claim.get("q_en") or ""
+        # tickers: primary lock (subject ticker)
+        tickers = list(primary or [])
+        # outlet: any _SOURCE_CUE hit's verbatim match
+        outlet_hint = None
+        m = _SOURCE_CUE.search(quote)
+        if m:
+            outlet_hint = m.group(0)
+        # polarity: directional verb cue
+        polarity_hint = None
+        if _DIR_UP.search(quote):
+            polarity_hint = "bullish"
+        elif _DIR_DOWN.search(quote):
+            polarity_hint = "bearish"
+        # date_range: any explicit year in quote → that whole year
+        # window (matches news_merged.timestamp[:10] day-precision)
+        date_range = None
+        years = sorted(set(re.findall(r'\b(20\d{2})\b', quote)))
+        if years:
+            date_range = (f"{years[0]}-01-01", f"{years[-1]}-12-31")
+        # numeric hints: dollar figures, percentages, plain numbers ≥ 3 digits
+        numeric_hints: list[str] = []
+        for n in re.findall(
+                r'\$[\d.,]+(?:\s*[BMK])?'      # $1.32 / $11.30B
+                r'|\d+(?:\.\d+)?\s*%'           # +24% / -10.49%
+                r'|\b\d{3,}(?:,\d{3})*\b',      # 12,936 / 15936
+                quote):
+            numeric_hints.append(n.strip())
+        # free-text query: q_en (if Chinese) + signal tokens
+        text_parts: list[str] = []
+        if q_en:
+            text_parts.append(q_en)
+        sig = _claim_signal(quote)
+        if sig:
+            text_parts.append(sig)
+        return NewsQuery(
+            tickers=tickers,
+            date_range=date_range,
+            polarity_hint=polarity_hint,
+            outlet_hint=outlet_hint,
+            text=" ".join(text_parts),
+            numeric_hints=numeric_hints[:6],
+        )
 
     def _grounded_check(self, evidence: str, facts: str,
-                        sections: list[str]) -> list[tuple[str, str]]:
+                        sections: list[str],
+                        news_evidence: str = "") -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []
         seen: set[str] = set()
         for sec in sections:
@@ -643,6 +748,7 @@ class ReviewAgent:
                       "content": self._grounded_p.format(
                           rubric=self._rubric_for(sec[:4000]),
                           facts=facts[:4000], evidence=evidence,
+                          news_evidence=news_evidence,
                           section=sec[:4000])}],
                     config=self.llm,
                     **{**self.params,
