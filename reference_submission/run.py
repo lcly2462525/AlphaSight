@@ -38,6 +38,8 @@ sys.path.insert(0, str(_SELF))
 ROOT = _SELF.parent
 
 from schemas import ReviewRequest, Report, GenerateRequest, ReviewIssue  # noqa: E402
+from llm import LLMConfig  # noqa: E402
+from rereview_rounding import filter_rounding_issues  # noqa: E402
 
 
 def _load_submission_class(bundle: Path, *, class_name: str = "Submission"):
@@ -131,6 +133,9 @@ def cmd_review(args) -> int:
     sub = _setup_submission(args)
     n_ok = n_fail = 0
     out_path = args.out / "review.jsonl"
+    rounding_reject_path = args.out / "review_rounding_dropped.jsonl"
+    if rounding_reject_path.exists():
+        rounding_reject_path.unlink()
     if not args.requests.exists():
         print(f"error: {args.requests} not found", file=sys.stderr)
         return 2
@@ -152,12 +157,30 @@ def cmd_review(args) -> int:
                       f"expected list[ReviewIssue]")
                 n_fail += 1
                 continue
+            before_filter = len(issues)
+            dropped_rounding = []
+            try:
+                issues, dropped_rounding = filter_rounding_issues(
+                    issues, llm=LLMConfig.from_env())
+            except Exception as e:
+                print(f"[rev] {req.request_id}  rounding rereview skipped: "
+                      f"{type(e).__name__}: {e}", file=sys.stderr)
             line = {
                 "request_id": req.request_id,
                 "issues": [i.model_dump() for i in issues],
             }
             out_fh.write(json.dumps(line, ensure_ascii=False) + "\n")
-            print(f"[rev] {req.request_id}  ({elapsed:.1f}s, {len(issues)} issues)")
+            if dropped_rounding:
+                with rounding_reject_path.open("a", encoding="utf-8") as rej_fh:
+                    for item in dropped_rounding:
+                        if item.get("kept"):
+                            continue
+                        rej_fh.write(json.dumps({
+                            "request_id": req.request_id,
+                            **item,
+                        }, ensure_ascii=False) + "\n")
+            print(f"[rev] {req.request_id}  ({elapsed:.1f}s, {len(issues)} issues, "
+                  f"rounding_drop={before_filter - len(issues)})")
             n_ok += 1
     print(f"\ndone: {n_ok} review, {n_fail} fail. output → {out_path}")
     return 0 if n_fail == 0 else 1

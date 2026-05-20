@@ -42,8 +42,11 @@ Hard rules:
 # VERIFIED FACTS
 {facts}
 
-# SOURCE PASSAGES
+# SOURCE PASSAGES (filings / research / social retrieved by the general retriever)
 {evidence}
+
+# NEWS EVIDENCE (atomic events with polarity / outlet / date, plus the matching source-article excerpt)
+{news_evidence}
 
 # REPORT SECTION
 """{section}"""
