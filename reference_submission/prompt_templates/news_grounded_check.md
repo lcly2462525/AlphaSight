@@ -10,6 +10,34 @@ Otherwise return no issue.
 
 Hard rules:
 
+- **News evidence is a SECONDARY, VERIFICATION-ONLY source.** It is
+  NEVER the authoritative reference for a precise calculation. Any
+  claim whose correctness depends on arithmetic — EPS actual /
+  consensus / surprise, financial-statement metrics (revenue, net
+  income, FCF, AUM), peer membership, daily prices, price returns,
+  ratios, percentage growth derived from two reported figures, or
+  filing dates / accession numbers — is owned by the structured
+  corpus (earnings.json / financials_reported.json / peers.json /
+  prices CSV / sec_submissions.json) and is handled by the general
+  pass against VERIFIED FACTS. **For any such claim, return
+  `{{"issues": []}}` here even if the news evidence appears to
+  disagree.** Defer to facts; do not emit.
+- The ONLY claim shapes the news pass may flag are ones where NEWS
+  is the natively authoritative source AND no precise arithmetic is
+  required:
+  - **Source / outlet misattribution** — a quote / figure attributed
+    to the wrong outlet or research firm.
+  - **Polarity or rating-action reversal** — upgrade vs. downgrade,
+    raised vs. cut, beat vs. miss, bullish vs. bearish framing, when
+    news plainly states the opposite direction.
+  - **Event date errors** — a specific event (recall, lawsuit, deal
+    announcement, rating action, product launch) tied to the wrong
+    calendar date in news.
+  - **Narrative numbers that only news reports** — recall vehicle
+    counts, news-reported market cap rounding, dividend percentages,
+    M&A league-table figures, production budgets, client-asset
+    headlines — where news IS the primary record and no structured
+    file covers the value.
 - Flag a statement ONLY when news evidence is CONCRETE: a specific
   number, an explicit date, a stated rating action with both old
   and new grades, or a named outlet/firm. If you can only say "no

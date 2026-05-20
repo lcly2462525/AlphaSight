@@ -40,6 +40,21 @@ For each claim type, the analyst consults the listed source first.
 | News number, event date, polarity or rating action, source attribution | news_merged/<TICKER>.jsonl and the underlying news/<TICKER>/*.json files in `source_paths` |
 | Report-internal contradiction | the report text itself |
 
+Authority is asymmetric. The structured files in the top six rows
+(earnings.json, financials_reported.json, sec_submissions.json,
+peers.json, prices CSV) are the SINGLE authoritative record for any
+claim that requires precise arithmetic — EPS components, surprise
+percentages, dollar-denominated financial-statement lines, peer
+membership, daily prices, period returns, ratios derived from two
+reported figures. News evidence is a **verification-only** secondary
+source: it may corroborate a structured value but it never overrides
+one, and it is never the basis for emitting an issue against an
+arithmetically computable claim. News is the native authority only
+for source / outlet attribution, polarity / rating actions, event
+dates, and narrative numbers (recall counts, news-reported market
+cap, dividend percentages, M&A league-table figures, production
+budgets, client-asset headlines) that no structured file covers.
+
 ## 3. Error Taxonomy
 
 Seven categories of injected errors. Each entry in this section opens

@@ -24,6 +24,12 @@ DROP if:
   passage provides ...") with no concrete contradicting value given.
 - It is an opinion, forecast, valuation, price target, or soft narrative.
 - The `quote` is not an assertive factual statement.
+- The candidate disputes a precise calculation (EPS actual / consensus /
+  surprise, a financial-statement dollar value, a daily price, a price
+  return, a ratio, or a percentage derived from two reported figures)
+  using only a news passage as evidence. Such claims must be checked
+  against the structured VERIFIED FACTS; if the facts agree with the
+  report (or are silent), DROP. News alone never overturns arithmetic.
 
 When genuinely unsure, KEEP. Fail toward KEEP.
 
