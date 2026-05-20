@@ -1,6 +1,12 @@
-# Dataset — large binary/data files, not tracked in git
+# Dataset — large binary/data, machine-specific symlinks, not tracked
+# in git. Both `dataset/` (directory) and `dataset` (symlink/file) must
+# be ignored — historically `dataset` was committed as a symlink to
+# `/inspire/.../dataset` which only resolved on the cloud env and
+# broke every other machine on git pull/reset.
+dataset
 dataset/
 dataset.zip
+news_merged.zip
 
 # Large slide deck — exceeds GitHub 100MB single-file limit
 *.pptx
