@@ -25,9 +25,39 @@ import re
 from llm import chat
 from schemas import ReviewIssue
 from retrieval.numeric import approx_equal, contradicts, parse_numbers
+from retrieval.textutil import tokenize as _toks
 from agents._util import load_prompt, parse_json_obj
 from agents.anchor import Anchored
 from agents.tables import col, parse_tables
+
+
+# ---- skill rubric splitting (RAG over case library) ----------------
+# skill_rubric.md mixes a stable CORE (intro + class headers + FP
+# guards + quote discipline + reason templates) with ~60 worked case
+# bullets. The case bullets are the bulk of the tokens; only the few
+# closest to the section being judged are useful. Split them out at
+# init, BM25-index the cases, and serve top-K per call.
+_CASE_LINE_RE = re.compile(r'^\s*-\s*`(tg|val)\s+r\d+', re.IGNORECASE)
+_H2_RE = re.compile(r'^##\s')
+
+
+def _split_rubric_cases(text: str) -> tuple[str, list[str]]:
+    """Return (core_block, cases). `core` keeps every line EXCEPT the
+    case-bullet lines inside the `## 7 error classes` section; `cases`
+    is the list of those bullet lines (one per worked example)."""
+    cases: list[str] = []
+    kept: list[str] = []
+    in_classes = False
+    for line in text.splitlines():
+        if _H2_RE.match(line):
+            in_classes = "error classes" in line.lower()
+            kept.append(line)
+            continue
+        if in_classes and _CASE_LINE_RE.match(line):
+            cases.append(line.strip())
+        else:
+            kept.append(line)
+    return "\n".join(kept), cases
 
 _METRIC = [
     ("eps", re.compile(r"\beps\b|earnings per share", re.I)),
@@ -292,6 +322,22 @@ class ReviewAgent:
             self._rubric = load_prompt("skill_rubric.md")
         except FileNotFoundError:
             self._rubric = ""
+        # Split rubric into stable CORE (FP guards / templates / class
+        # headers) + worked-CASE library. Build a BM25 index over the
+        # cases so each LLM call gets only the top-K most relevant
+        # ones, not all 60+ at once. Fail-open: any error falls back
+        # to the full rubric.
+        self._rubric_core, self._rubric_cases = _split_rubric_cases(
+            self._rubric)
+        self._case_bm25 = None
+        if self._rubric_cases:
+            try:
+                from rank_bm25 import BM25Okapi
+                _ct = [_toks(c) for c in self._rubric_cases]
+                if any(_ct):
+                    self._case_bm25 = BM25Okapi(_ct)
+            except Exception:
+                self._case_bm25 = None
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -523,6 +569,44 @@ class ReviewAgent:
             if 0 <= i < len(claims) and en:
                 claims[i]["q_en"] = en
 
+    def _rubric_for(self, query: str, top_k: int = 10) -> str:
+        """Return rubric_core + the top-K worked CASES most relevant
+        to `query` (BM25 over the case library). When the BM25 index
+        isn't built or query has no tokens, pad with a class-balanced
+        sample so the LLM still sees breadth. Falls back to the full
+        rubric if anything is missing — never crashes the judgment."""
+        if not self._rubric_cases:
+            return self._rubric or ""
+        if self._case_bm25 is None:
+            return self._rubric or ""
+        sel: list[str] = []
+        toks = _toks(query or "")
+        if toks:
+            scores = self._case_bm25.get_scores(toks)
+            ranked = sorted(range(len(self._rubric_cases)),
+                            key=lambda i: -scores[i])
+            sel = [self._rubric_cases[i] for i in ranked[:top_k]
+                   if scores[i] > 0]
+        if len(sel) < top_k:
+            # No query signal (or weak match) — pad with class-balanced
+            # sample (every Nth case across the file order, which is
+            # already grouped by class) so the LLM keeps cross-class
+            # coverage even when BM25 had nothing to anchor on.
+            seen = set(sel)
+            step = max(1, len(self._rubric_cases) // max(1, top_k))
+            for c in self._rubric_cases[::step]:
+                if c not in seen:
+                    sel.append(c)
+                    seen.add(c)
+                    if len(sel) >= top_k:
+                        break
+        if not sel:
+            return self._rubric_core or ""
+        return (f"{self._rubric_core}\n\n"
+                f"## Top-{len(sel)} most relevant worked examples "
+                "(retrieved per this section)\n"
+                + "\n".join(sel))
+
     def _evidence_pool(self, primary: list[str],
                        claims: list[dict]) -> str:
         """ONE strong generate-style retrieval, reused across every
@@ -557,7 +641,7 @@ class ReviewAgent:
                 raw = chat(
                     [{"role": "user",
                       "content": self._grounded_p.format(
-                          rubric=self._rubric,
+                          rubric=self._rubric_for(sec[:4000]),
                           facts=facts[:4000], evidence=evidence,
                           section=sec[:4000])}],
                     config=self.llm,
@@ -597,7 +681,8 @@ class ReviewAgent:
             raw = chat(
                 [{"role": "user",
                   "content": self._filter_p.format(
-                      rubric=self._rubric,
+                      rubric=self._rubric_for(
+                          " ".join(q for q, _ in cands[:24])),
                       facts=facts[:4000], items=items)}],
                 config=self.llm,
                 **{**self.params,
