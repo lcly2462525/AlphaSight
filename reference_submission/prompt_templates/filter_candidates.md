@@ -27,6 +27,9 @@ DROP if:
 
 When genuinely unsure, KEEP. Fail toward KEEP.
 
+# AUDIT RUBRIC
+{rubric}
+
 # VERIFIED FACTS
 {facts}
 

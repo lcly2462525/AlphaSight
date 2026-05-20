@@ -282,6 +282,16 @@ class ReviewAgent:
         self._grounded_p = load_prompt("grounded_review.md")
         self._filter_p = load_prompt("filter_candidates.md")
         self._translate_p = load_prompt("translate_claims.md")
+        # Skill-derived audit rubric (7 error classes + FP guards +
+        # reason templates + worked examples). Injected at judgment
+        # time into grounded_review and filter_candidates so the LLM
+        # has the calibrated taxonomy in context — fail-open: if the
+        # file is missing, the rubric is empty and the prompts still
+        # format cleanly (the placeholders accept an empty string).
+        try:
+            self._rubric = load_prompt("skill_rubric.md")
+        except FileNotFoundError:
+            self._rubric = ""
 
     def _primary_ticker(self, report: str) -> list[str]:
         """The company the report is about. Single/two-letter tickers
@@ -547,6 +557,7 @@ class ReviewAgent:
                 raw = chat(
                     [{"role": "user",
                       "content": self._grounded_p.format(
+                          rubric=self._rubric,
                           facts=facts[:4000], evidence=evidence,
                           section=sec[:4000])}],
                     config=self.llm,
@@ -586,6 +597,7 @@ class ReviewAgent:
             raw = chat(
                 [{"role": "user",
                   "content": self._filter_p.format(
+                      rubric=self._rubric,
                       facts=facts[:4000], items=items)}],
                 config=self.llm,
                 **{**self.params,

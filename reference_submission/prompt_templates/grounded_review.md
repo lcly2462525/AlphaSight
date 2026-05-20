@@ -24,6 +24,12 @@ Hard rules:
   Absence of support is not contradiction. When unsure, skip.
 - Opinions, forecasts, valuations, and soft narrative are never issues.
 - You must be able to point to the exact fact/passage that conflicts.
+- **Use the AUDIT RUBRIC below**: classify each issue into one of the 7
+  error classes, respect the FP guards, write the reason using the
+  matching template.
+
+# AUDIT RUBRIC
+{rubric}
 
 # VERIFIED FACTS
 {facts}
